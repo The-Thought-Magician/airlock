@@ -15,10 +15,10 @@ These are hard prerequisites. Nothing below can be built or tested without them.
 
 | # | Blocker | Action | Owner | Status |
 |---|---------|--------|-------|--------|
-| 1 | **Solari API key** | Sign up at console.getsolari.com, generate an `slr_live_` key | Chiranjeet | TODO |
-| 2 | Free-tier concurrency limits | Email hello@getsolari.com, mention the challenge, request a quota bump | Chiranjeet | TODO |
+| 1 | **Solari API key** | Sign up at console.getsolari.com, generate an `slr_live_` key | Chiranjeet | ✅ DONE — key in `.env`, verified against the cookbook quickstart |
+| 2 | Free-tier concurrency limits | Email hello@getsolari.com, mention the challenge, request a quota bump | Chiranjeet | WON'T DO |
 | 3 | Snapshot API availability | ✅ Verified in docs — see §0.1 | — | RESOLVED |
-| 4 | Egress control mechanism | ⚠️ No native egress control documented — fallback required, see §3.2 | Chiranjeet | RESOLVED, needs build |
+| 4 | Egress control mechanism | ✅ None native; built in-VM and verified 7/7 — see §3.2 and `docs/FINDINGS-DAY1.md` | Chiranjeet | RESOLVED, mechanism proven |
 | 5 | Billing awareness | Read docs.getsolari.com/pricing; understand per-sandbox-hour cost | Chiranjeet | TODO |
 
 **Note on #1:** the API key gates everything. Get it first, verify it against
@@ -206,43 +206,81 @@ Trade-off to document: servers that expect a large working tree pay an upload
 cost at first snapshot. Mitigate by baking stable trees into the snapshot, or by
 attaching a volume for caches.
 
-### 3.2 Egress allowlist — P0, and the only real engineering risk
+### 3.2 Egress allowlist — P0, hard boundary
 
 Solari documents no network policy controls. This must be built inside the VM.
 
+> **Revised 2026-09-02** after measuring a live sandbox. The original design
+> here was uid-keyed `iptables` rules. That is not buildable on this kernel —
+> see `docs/FINDINGS-DAY1.md`. The replacement below is stronger, and the
+> "best-effort" fallback this section used to carry has been deleted because it
+> is no longer needed.
+
+**Why the original design is out.** The sandbox kernel has no loadable modules
+(no `/lib/modules`, no `modprobe`). `xt_owner` is not compiled in, so
+`--uid-owner` matching does not exist. The default `nf_tables` backend is
+broken outright, and `veth` is absent, ruling out the conventional
+netns-plus-veth pairing too. We do get `uid=0` with a full capability bounding
+set, so privilege was never the problem — the specific match module was.
+
 **Design**
 
-1. During the snapshot build, install a filtering forward proxy in the VM
-   (tinyproxy, squid, or a small Go proxy with a domain allowlist).
-2. Create an unprivileged user, `mcp`, that the server runs as.
-3. Set `iptables` rules: `DROP` all outbound from uid `mcp`, except to the
-   proxy's loopback port. `ACCEPT` outbound from the proxy's own uid.
+1. During the snapshot build, install `tinyproxy`, `socat`, and `iproute2`, and
+   create an unprivileged user `mcp` (uid 4000).
+2. Create a network namespace with **no interfaces at all** — only loopback.
+   With no interface there is no route, so it is a total network blackout,
+   enforced by the absence of a path rather than by a filter rule that has to
+   be evaluated correctly.
+3. Bridge that namespace to the proxy over a **unix domain socket**. Unix
+   sockets are filesystem objects, so they cross a namespace boundary freely:
+   `socat` inside the namespace listens on `127.0.0.1:8888` and forwards to
+   `/run/airlock/proxy.sock`; `socat` outside forwards that to tinyproxy.
 4. Inject `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` into the server's
-   environment via `envs` at create time.
-5. The proxy enforces the domain allowlist from the policy file and logs every
-   attempt, allowed or blocked.
-6. Bake all of this into the template or the snapshot, so it is present before
-   any third-party code runs.
+   environment. The server sees an ordinary loopback proxy and needs no
+   modification.
+5. tinyproxy enforces the domain allowlist from the policy file
+   (`FilterDefaultDeny Yes`, one anchored ERE per allowed domain) and logs
+   every attempt, allowed or blocked.
+6. Launch the server as
+   `ip netns exec airlock setpriv --reuid=4000 --regid=4000 --clear-groups --no-new-privs <launcher>`.
+7. Bake all of this into the snapshot, so it exists before any third-party code
+   runs.
 
-**Why the uid split matters:** a server that simply ignores `HTTP_PROXY` and
-opens a raw socket must still get past `iptables`, and it cannot, because the
-rules are keyed to its uid and it does not own them.
+```
+   ┌─ netns "airlock" — no interfaces, lo only ─┐   ┌─ root netns ─────────┐
+   │  MCP server (uid 4000, no-new-privs)       │   │  tinyproxy :8888     │
+   │    HTTP_PROXY=127.0.0.1:8888               │   │  domain allowlist    │
+   │        └─ socat TCP-LISTEN:8888 ───────────┼───┼─ socat UNIX-LISTEN   │
+   │                    /run/airlock/proxy.sock │   │        └─ internet   │
+   └────────────────────────────────────────────┘   └──────────────────────┘
+                    (shared filesystem crosses the netns)
+```
+
+**Why this is stronger than the uid split.** A server that ignores
+`HTTP_PROXY` and opens a raw socket gains nothing: there is no interface to
+reach anything directly, so there is no route to ignore it *to*. And there is
+no rule for a compromised process to flush — escaping requires `CAP_SYS_ADMIN`
+to `setns` back into the host namespace, which an unprivileged uid started with
+`--no-new-privs` does not have and cannot acquire.
+
+**Verified, 7/7 checks** (`npm run probe:netns`, raw output in `findings/`):
+blackout confirmed; allowlisted host reachable through the bridge;
+non-allowlisted host refused; raw sockets to hardcoded IPs all fail with no
+route; DNS resolution fails; `nsenter` to the host namespace denied.
 
 **Honest residual risk, which belongs in the threat model:**
 
-- A server that achieves root inside the VM can flush the iptables rules.
-- Mitigations: run as `mcp` with no sudo, drop capabilities, no setuid binaries
-  in the image, and treat a local privilege escalation as the documented
-  boundary of the guarantee.
-- Even in that worst case the blast radius is a disposable cloud VM with none of
-  the developer's files or credentials in it. That is the whole point, and it is
-  a far better failure mode than the status quo.
-- DNS-based exfiltration and allowlisted-host abuse (posting secrets to a gist
-  on an allowed domain) are out of scope. Name both explicitly.
-
-**Fallback if the iptables path fights you:** enforce at the proxy only, and
-label the control "best-effort egress filtering" rather than a hard boundary.
-Weaker, still demonstrable, and honest.
+- The boundary is now a kernel-level container escape, not "root in the VM
+  flushes the rules." That is a materially narrower claim than the original
+  design could make.
+- Even if it were breached, the blast radius is a disposable cloud VM with none
+  of the developer's files or credentials in it. That is the whole point, and it
+  is a far better failure mode than the status quo.
+- **DNS-based exfiltration is blocked**, not out of scope: the jail has no DNS
+  at all, and the proxy resolves on the server's behalf. This is an upgrade over
+  the original design — say so.
+- Allowlisted-host abuse (posting secrets to a gist on an allowed domain)
+  remains out of scope. Name it explicitly.
 
 ### 3.3 Secret brokering — P1
 
@@ -388,15 +426,17 @@ a live API key to settle.
 |---|----------|----------------|-------------------------------|
 | 1 | ~~Snapshot create and restore?~~ | — | ✅ Resolved: `snapshot()`, `revert()`, `fromSnapshot` |
 | 2 | ~~Native egress allowlisting?~~ | — | ✅ Resolved: none exists. Build it in-VM per §3.2 |
-| 3 | Do you get root in the sandbox, and can you run `iptables`? | §3.2 depends on it | Proxy-only enforcement, relabelled best-effort |
-| 4 | What is the per-call round-trip latency, measured? | Decides daily usability | Publish the number honestly; reposition as a vetting harness if bad |
-| 5 | Does `base` ship node and python? | First-snapshot build time | Custom template via the image builder |
+| 3 | ~~Root in the sandbox, and can you run `iptables`?~~ | — | ✅ Resolved: root yes, `xt_owner` no. §3.2 rewritten around netns + unix-socket bridge, and it is a *hard* boundary |
+| 4 | ~~Per-call round-trip latency?~~ | — | ⚠️ Partly: 256ms p50 for one-shot `exec`, 1426ms cold boot. The relay figure that actually decides usability is still unmeasured |
+| 5 | ~~Does `base` ship node and python?~~ | — | ✅ Resolved: node 18.20.4, python 3.11.2, plus npm/npx/pip3/git/curl. `uv`/`uvx` must be installed |
 | 6 | Free-tier concurrency cap? | One sandbox per server adds up | Multiplex servers into one sandbox, weaker isolation, documented |
 | 7 | Is `pause`+`autoResume` cheaper and faster than `fromSnapshot`? | Warm-start strategy | Measure both, pick one, explain the choice |
 | 8 | Does the stdio relay work over `WS /control/:id` cleanly? | Core mechanism | `exec` with streaming stdin/stdout as the alternative path |
 
-Question 3 is now the single load-bearing unknown. Settle it in the first hour
-with the API key: boot a sandbox, run `id`, run `iptables -L`.
+Question 3 is settled — see `docs/FINDINGS-DAY1.md`. Questions 6, 7 and 8 remain,
+and 8 is now the load-bearing one: the SDK exposes `commands.start()` returning a
+handle with `stdin()`, `onData()`, `wait()` and `kill()`, which is the right
+shape, but it has not yet been driven by a real MCP server.
 
 ---
 
@@ -528,8 +568,9 @@ resolved first.
 
 | Risk | Mitigation |
 |------|-----------|
-| No root or no iptables in the sandbox | Proxy-only enforcement, relabelled best-effort; check in hour one |
-| Malicious server escalates to root and flushes the rules | Documented boundary; blast radius is still a disposable VM with no user data |
+| ~~No root or no iptables in the sandbox~~ | ✅ Retired. Root yes, `xt_owner` no; §3.2 rebuilt on netns + unix-socket bridge, verified 7/7 |
+| ~~Malicious server escalates to root and flushes the rules~~ | ✅ Retired. There are no rules to flush; escape now requires `CAP_SYS_ADMIN` the process cannot acquire |
+| Kernel-level container escape | Documented boundary; blast radius is still a disposable VM with no user data |
 | Latency makes it unpleasant to use | Measure early; if bad, reposition as a vetting harness rather than daily runtime |
 | Free-tier caps block a multi-server demo | Request a quota bump early; fall back to multiplexing |
 | Runaway sandbox cost | Explicit `kill()` in every teardown path, aggressive idle timeouts, cost in the log |

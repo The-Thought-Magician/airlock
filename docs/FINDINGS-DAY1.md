@@ -14,9 +14,9 @@ mechanism described in §3.2**.
 | # | Question (SPEC §7) | Answer |
 |---|--------------------|--------|
 | 3 | Root in the sandbox? `iptables`? | **Root yes, iptables partly** — see below. The spec's uid-keyed design is not buildable; a stronger one is. |
-| 4 | Per-call round-trip latency | **256ms p50** for one-shot `exec`. Not yet the relay number — see caveat. |
+| 4 | Per-call round-trip latency | **253ms p50**, which is one network RTT to the gateway. Airlock adds ~0. |
 | 5 | Does `base` ship node and python? | **Yes.** node v18.20.4, python 3.11.2, npm, npx, pip3, git, curl. |
-| 8 | Does the stdio relay work over the control channel? | **Looks yes** — `commands.start()` returns a handle with `stdin()`, `onData()`, `wait()`, `kill()`. Not yet exercised against a real server. |
+| 8 | Does the stdio relay work over the control channel? | **Yes, proven** — a real unmodified MCP server runs end to end through it. |
 
 Still open: Q6 (concurrency cap), Q7 (`pause`+`autoResume` vs `fromSnapshot`).
 
@@ -143,27 +143,83 @@ tinyproxy filter file, with `FilterDefaultDeny Yes`.
 
 ---
 
-## 4. Latency (Q4) — with a caveat that matters
+## 4. Latency (Q4) — answered, and the answer is "it's your RTT"
 
-Measured over 20 sequential trivial commands:
+I expected the relay to be much faster than the one-shot `exec` path, on the
+grounds that `exec` pays for a process spawn each call while the relay reuses a
+live process on an open WebSocket. **That hypothesis was wrong**, and the way it
+was wrong is the useful finding.
 
-| Metric | One-shot `exec` |
-|--------|-----------------|
-| mean | 285 ms |
-| p50 | 256 ms |
-| p95 | 515 ms |
+| Path | mean | p50 | p95 | min |
+|------|------|-----|-----|-----|
+| One-shot `exec` (`probe.ts`) | 285 ms | 256 ms | 515 ms | — |
+| **Live relay, `tools/list`** (`relay-e2e.ts`) | **266 ms** | **253 ms** | 397 ms | **250 ms** |
 
-Cold boot of a `base` sandbox: **1426 ms**. Control-channel connect: sub-second.
+The two are the same, and the relay has a hard floor at 250ms. Measuring the
+raw network path explains why:
 
-**This is not yet the number that decides daily usability.** It measures a
-process spawn over the one-shot REST path — a fresh command each time. The
-Airlock relay keeps one long-lived process and pushes JSON-RPC frames over the
-already-open control WebSocket via `commands.start()`, which should be far
-cheaper. The honest per-tool-call figure has to be measured against the real
-relay, and that number is what belongs in the README.
+```
+$ curl -w 'connect=%{time_connect}s' https://api.getsolari.com/
+connect=0.263s    connect=0.275s    connect=0.263s
+```
 
-Do not publish 256ms as "Airlock's latency" — it is the ceiling, not the
-measurement.
+**A bare TCP connect to the gateway is ~263ms.** The entire per-call latency is
+one network round trip between the developer's machine and the Solari gateway.
+Airlock's relay adds no measurable overhead on top of it, and neither does the
+process spawn — the `exec` path was never the bottleneck.
+
+What to publish, then, is not "Airlock costs 253ms" but:
+
+> Airlock adds no measurable latency of its own. Per-call cost is one round trip
+> to your nearest Solari region — 253 ms p50 from the machine these numbers were
+> taken on, where a bare TCP connect to the gateway is 263 ms. Closer to the
+> region, it is proportionally less.
+
+That framing is both honest and more useful, because it tells a reader the
+number is a property of their network rather than of the tool. It also means the
+"reposition as a vetting harness if latency is bad" fallback in §7 is not needed
+for architectural reasons — there is nothing to optimise away.
+
+Other measurements:
+
+- Cold boot of a `base` sandbox: **1223–1426 ms**
+- `npm install -g` of a real MCP server: **4.0 s** (this is what §4 snapshots away)
+- Server process start once installed: **414 ms**
+- MCP `initialize` handshake: **466 ms**
+
+---
+
+## 4b. The relay works (Q8)
+
+`scripts/relay-e2e.ts` drives `@modelcontextprotocol/server-everything`,
+unmodified, inside a sandbox:
+
+```
+sandbox up in 1223ms
+installed in 4.0s
+server process started in 414ms
+initialize  466ms  →  mcp-servers/everything 2.0.0
+tools/list  260ms  →  13 tools: echo, get-annotated-message, get-env, …
+tools/call  334ms  →  "Echo: airlock"
+```
+
+`commands.start()` is the right primitive: frames arriving before `onData` is
+attached are buffered by the SDK, so there is no startup race, and `stdin()` /
+`wait()` / `kill()` cover the rest of the lifecycle. Q8 is settled.
+
+### One caveat found by reading the SDK
+
+`cmd.data` frames are base64 on the wire, but the SDK decodes each frame with a
+fresh `new TextDecoder()` and no `{ stream: true }`. A multi-byte UTF-8
+character split across two frames will therefore be corrupted into replacement
+characters before Airlock ever sees it.
+
+This has not been observed in practice and needs a chunk boundary to land
+mid-character, but it is a real defect on a path that carries arbitrary tool
+output. It belongs in `docs/LIMITATIONS.md`. The fix, if it bites, is to wrap
+the server in the guest so its stdout is base64-framed per line, which keeps the
+transport pure ASCII — that wrapper is also the natural place to hook the §3.6
+audit log.
 
 ---
 
@@ -191,6 +247,7 @@ npm run probe            # environment, privileges, runtimes, latency
 npm run probe:egress     # the spec's original §3.2 design (fails, kept as evidence)
 npm run probe:netfilter  # why it fails: modules, backends, veth
 npm run probe:netns      # the replacement mechanism (7/7)
+npm run relay:e2e        # a real MCP server end to end, and the honest latency
 ```
 
 Each writes a timestamped JSON to `findings/`.

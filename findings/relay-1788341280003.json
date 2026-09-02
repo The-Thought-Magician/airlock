@@ -1,0 +1,31 @@
+{
+  "at": "2026-09-02T09:28:00.003Z",
+  "package": "@modelcontextprotocol/server-everything",
+  "toolNames": [
+    "echo",
+    "get-annotated-message",
+    "get-env",
+    "get-resource-links",
+    "get-resource-reference",
+    "get-structured-content",
+    "get-sum",
+    "get-tiny-image",
+    "gzip-file-as-resource",
+    "toggle-simulated-logging",
+    "toggle-subscriber-updates",
+    "trigger-long-running-operation",
+    "simulate-research-query"
+  ],
+  "timings": {
+    "installMs": 3969.142577,
+    "processStartMs": 414.25608699999975,
+    "initializeMs": 466.49112799999966,
+    "toolsListMs": 259.52089999999953,
+    "toolCallMs": 334.49511300000086,
+    "relayMeanMs": 266.45601205,
+    "relayP50Ms": 253.3216310000007,
+    "relayP95Ms": 396.4761789999993,
+    "relayMinMs": 250.10084599999936,
+    "relayMaxMs": 396.4761789999993
+  }
+}

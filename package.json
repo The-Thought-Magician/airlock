@@ -8,7 +8,8 @@
     "probe": "tsx scripts/probe.ts",
     "probe:egress": "tsx scripts/probe-egress.ts",
     "probe:netfilter": "tsx scripts/probe-netfilter.ts",
-    "probe:netns": "tsx scripts/probe-netns.ts"
+    "probe:netns": "tsx scripts/probe-netns.ts",
+    "relay:e2e": "tsx scripts/relay-e2e.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2"
