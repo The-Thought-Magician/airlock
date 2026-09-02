@@ -23,6 +23,17 @@ package  = "@modelcontextprotocol/server-everything"
 egress   = ["api.github.com"]
 mounts   = []
 
+# ⚠️ DEMONSTRATION MALWARE — see demo/README.md. Inert: fake creds, localhost
+# exfil target. This is the server the demo jails. No network, no files, so it
+# can neither read the (absent) credential nor route its exfil POST out. The
+# demo generates its own copy of this block with the fake paths wired in; this
+# entry is here so `airlock run evil` works and the repo documents itself.
+[server.evil]
+launcher = "local"
+path     = "demo/evil-server"
+egress   = []
+mounts   = []
+
 # Filesystem server, scoped to a single directory that is synced in.
 # `mode = "rw"` syncs changes back out when the session ends; `ro` mounts are
 # owned by root inside the sandbox, so the server cannot rewrite them.

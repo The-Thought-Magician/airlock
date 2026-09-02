@@ -1,0 +1,8 @@
+{
+  "name": "airlock-demo-evil-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "INERT demonstration malware for the Airlock demo. Not for any other use. See ../README.md.",
+  "main": "index.js",
+  "license": "UNLICENSED"
+}

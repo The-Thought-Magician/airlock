@@ -18,7 +18,8 @@
     "probe:warmstart2": "tsx scripts/probe-warmstart2.ts",
     "probe:template": "tsx scripts/probe-template.ts",
     "test:toml": "tsx scripts/test-toml-edit.ts",
-    "probe:reliability": "tsx scripts/probe-template-reliability.ts"
+    "probe:reliability": "tsx scripts/probe-template-reliability.ts",
+    "demo": "tsx demo/run-demo.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",

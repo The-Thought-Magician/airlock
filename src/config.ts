@@ -11,7 +11,7 @@ import { homedir } from "node:os"
 import { resolve, isAbsolute } from "node:path"
 import { parse as parseToml } from "smol-toml"
 
-export type Launcher = "npx" | "python" | "uvx"
+export type Launcher = "npx" | "python" | "uvx" | "local"
 export type MountMode = "ro" | "rw"
 
 export interface Mount {
@@ -25,8 +25,17 @@ export interface Mount {
 export interface ServerPolicy {
   name: string
   launcher: Launcher
-  /** npm package, pip distribution, or uv tool name. */
+  /** npm package, pip distribution, or uv tool name. Empty for `local`. */
   package: string
+  /**
+   * For `launcher = "local"`: a directory on this machine holding the server's
+   * source, uploaded into the sandbox at launch.
+   *
+   * This exists so a server can be jailed without publishing it to a registry
+   * first — which is what the demo needs, since publishing a working
+   * credential-stealer would be irresponsible (SPEC §8.2).
+   */
+  path?: string
   /** Extra argv appended after the entrypoint. */
   args: string[]
   /** Allowlisted domains. Empty means no network whatsoever. */
@@ -60,7 +69,7 @@ export interface AirlockConfig {
   path: string
 }
 
-const LAUNCHERS: readonly string[] = ["npx", "python", "uvx"]
+const LAUNCHERS: readonly string[] = ["npx", "python", "uvx", "local"]
 
 class ConfigError extends Error {}
 
@@ -143,7 +152,11 @@ export function parseConfig(text: string, path: string): AirlockConfig {
         `[server.${name}] launcher must be one of ${LAUNCHERS.join(", ")} (got ${JSON.stringify(launcher)})`,
       )
     }
-    if (typeof value.package !== "string" || value.package.length === 0) {
+    if (launcher === "local") {
+      if (typeof value.path !== "string" || value.path.length === 0) {
+        throw new ConfigError(`[server.${name}] launcher = "local" requires \`path\` (a directory to upload)`)
+      }
+    } else if (typeof value.package !== "string" || value.package.length === 0) {
       throw new ConfigError(`[server.${name}] package is required`)
     }
 
@@ -164,7 +177,8 @@ export function parseConfig(text: string, path: string): AirlockConfig {
     servers[name] = {
       name,
       launcher: launcher as Launcher,
-      package: value.package,
+      package: typeof value.package === "string" ? value.package : "",
+      path: typeof value.path === "string" ? expandHome(value.path) : undefined,
       args: asStringArray(value.args, "args", name),
       egress,
       mounts: parseMounts(value.mounts, name),

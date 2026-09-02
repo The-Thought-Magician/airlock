@@ -29,6 +29,12 @@ export const PROXY_PORT = 8888
 export const PROXY_SOCK = "/run/airlock/proxy.sock"
 export const PROXY_LOG = "/var/log/tinyproxy/tinyproxy.log"
 export const WORKDIR = "/home/mcp/work"
+/**
+ * Where a `local` launcher's source is uploaded. Owned by root and mode 555:
+ * the jailed user can read and execute it but cannot rewrite its own code,
+ * so a compromised server cannot persist a change into the next session.
+ */
+export const LOCAL_SERVER_DIR = "/opt/airlock-server"
 
 /** Where a launcher's entrypoint ended up, and how to invoke it. */
 export interface Entrypoint {
@@ -93,8 +99,50 @@ export async function installJailDependencies(sandbox: Sandbox, log: Logger): Pr
  * Returns how to invoke the installed entrypoint.
  */
 export async function installServer(sandbox: Sandbox, policy: ServerPolicy, log: Logger): Promise<Entrypoint> {
-  await installServerPackage(sandbox, policy, log)
+  if (policy.launcher === "local") {
+    await uploadLocalServer(sandbox, policy, log)
+  } else {
+    await installServerPackage(sandbox, policy, log)
+  }
   return resolveEntrypoint(sandbox, policy)
+}
+
+/**
+ * Upload a `local` launcher's source into the sandbox, as root, before the jail
+ * closes. Skips node_modules and .git: a local MCP server for this purpose
+ * should be dependency-free, and uploading a dependency tree file-by-file over
+ * the control channel would be painfully slow.
+ */
+export async function uploadLocalServer(sandbox: Sandbox, policy: ServerPolicy, log: Logger): Promise<void> {
+  if (!policy.path) throw new Error(`[server.${policy.name}] launcher = "local" requires a path`)
+  const { readFileSync, readdirSync, statSync } = await import("node:fs")
+  const { join, relative } = await import("node:path")
+
+  if (!statSync(policy.path).isDirectory()) {
+    throw new Error(`[server.${policy.name}] path must be a directory: ${policy.path}`)
+  }
+
+  const files: string[] = []
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.isFile()) files.push(full)
+    }
+  }
+  walk(policy.path)
+
+  log(`uploading ${files.length} file(s) from ${policy.path} → ${LOCAL_SERVER_DIR}`)
+  must(await sh(sandbox, `rm -rf ${LOCAL_SERVER_DIR} && mkdir -p ${LOCAL_SERVER_DIR}`), "preparing the server directory")
+  for (const file of files) {
+    await sandbox.files.write(`${LOCAL_SERVER_DIR}/${relative(policy.path, file)}`, readFileSync(file))
+  }
+  // Root-owned and read-only: the server runs as mcp and cannot modify itself.
+  must(
+    await sh(sandbox, `chown -R root:root ${LOCAL_SERVER_DIR} && chmod -R 555 ${LOCAL_SERVER_DIR}`),
+    "locking down the server directory",
+  )
 }
 
 /** Strip any version suffix: `@scope/pkg@1.2.3` → `@scope/pkg`. */
@@ -106,6 +154,11 @@ export function packageName(spec: string): string {
 /** The shell command that installs this policy's package. Shared with the template build. */
 export function installCommand(policy: ServerPolicy): string {
   switch (policy.launcher) {
+    case "local":
+      // Nothing to install: the source is uploaded at launch, not baked in.
+      // A local server changes every time you edit it, so pinning it into an
+      // immutable template would defeat the point of developing against it.
+      return "true"
     case "npx":
       return `npm install -g ${JSON.stringify(policy.package)} --silent --no-fund --no-audit`
     case "python":
@@ -159,6 +212,16 @@ export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy):
       return { cmd: "python3", args: ["-m", module, ...policy.args] }
     }
 
+    case "local": {
+      // Honour package.json `main` if there is one, else index.js.
+      const probe = await sh(
+        sandbox,
+        `node -e 'try{const p=require("${LOCAL_SERVER_DIR}/package.json");console.log(p.main||"index.js")}catch{console.log("index.js")}'`,
+      )
+      const main = probe.stdout.trim().split("\n").filter(Boolean).pop() || "index.js"
+      return { cmd: "node", args: [`${LOCAL_SERVER_DIR}/${main}`, ...policy.args] }
+    }
+
     case "uvx":
       throw new Error(
         'the uvx launcher is not implemented yet (uv is not in the base image). Use launcher = "npx" or "python".',
@@ -168,6 +231,7 @@ export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy):
 
 /** Read the version that actually landed, for the record in airlock.toml. */
 export async function installedVersion(sandbox: Sandbox, policy: ServerPolicy): Promise<string | undefined> {
+  if (policy.launcher === "local") return undefined
   const name = packageName(policy.package)
   const out =
     policy.launcher === "npx"
