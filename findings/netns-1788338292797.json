@@ -1,0 +1,54 @@
+{
+  "at": "2026-09-02T08:38:12.797Z",
+  "verdict": "2 check(s) failed — mechanism not yet proven",
+  "checks": [
+    {
+      "name": "bare netns is a total network blackout",
+      "expect": "curl fails (no interface, no route)",
+      "got": "code=000 exit=6",
+      "pass": true
+    },
+    {
+      "name": "proxy allows allowlisted host and refuses others",
+      "expect": "code=200 for api.github.com, non-200 for example.com",
+      "got": "code=000\nblocked=000",
+      "pass": false
+    },
+    {
+      "name": "jailed mcp reaches the ALLOWLISTED host through the bridge",
+      "expect": "code=200",
+      "got": "Cannot open network namespace \"airlock\": No such file or directory\n exit=255",
+      "pass": false
+    },
+    {
+      "name": "jailed mcp is REFUSED for a non-allowlisted host",
+      "expect": "non-200 (proxy denies)",
+      "got": "Cannot open network namespace \"airlock\": No such file or directory\n exit=255",
+      "pass": true
+    },
+    {
+      "name": "raw socket to a hardcoded IP is blocked (ignoring HTTP_PROXY does not help)",
+      "expect": "every destination blocked — no route exists",
+      "got": "Cannot open network namespace \"airlock\": No such file or directory",
+      "pass": true
+    },
+    {
+      "name": "DNS from the jail is blocked (kills DNS-tunnel exfil)",
+      "expect": "resolution fails",
+      "got": "Cannot open network namespace \"airlock\": No such file or directory",
+      "pass": true
+    },
+    {
+      "name": "jailed mcp cannot setns back to the host namespace",
+      "expect": "nsenter denied (needs CAP_SYS_ADMIN)",
+      "got": "Cannot open network namespace \"airlock\": No such file or directory",
+      "pass": true
+    }
+  ],
+  "sections": {
+    "install": "socat      /usr/bin/socat\ntinyproxy  /usr/bin/tinyproxy\nip         /usr/sbin/ip\nsetpriv    /usr/bin/setpriv\nunshare    /usr/bin/unshare\nuid=4000(mcp) gid=4000(mcp) groups=4000(mcp)",
+    "proxy setup (root netns)": "^api\\\\.github\\\\.com$\ntinyproxy_exit=0\nLISTEN 0      0          127.0.0.1:8888      0.0.0.0:*    users:((\"tinyproxy\",pid=504,fd=0))",
+    "unix-socket bridge": "sh: 1: Syntax error: \";\" unexpected",
+    "tinyproxy log (the §3.6 audit source)": "DEBUG     Sep 02 08:38:08.512 [504]: sending stored logs\nNOTICE    Sep 02 08:38:08.520 [504]: Initializing tinyproxy ...\nNOTICE    Sep 02 08:38:08.526 [504]: Reloading config file\nWARNING   Sep 02 08:38:08.534 [504]: line 13: deprecated option FilterExtended, use FilterType\nNOTICE    Sep 02 08:38:08.540 [504]: Reloading config file finished\nDEBUG     Sep 02 08:38:08.546 [504]: done sending stored logs\nCONNECT   Sep 02 08:38:11.218 [504]: Connect (file descriptor 2): 127.0.0.1\nCONNECT   Sep 02 08:38:11.230 [504]: Request (file descriptor 2): CONNECT api.github.com:443 HTTP/1.1\nNOTICE    Sep 02 08:38:11.238 [504]: Proxying refused on filtered domain \"api.github.com\"\nCONNECT   Sep 02 08:38:11.251 [504]: Connect (file descriptor 2): 127.0.0.1\nCONNECT   Sep 02 08:38:11.256 [504]: Request (file descriptor 2): CONNECT example.com:443 HTTP/1.1\nNOTICE    Sep 02 08:38:11.264 [504]: Proxying refused on filtered domain \"example.com\""
+  }
+}

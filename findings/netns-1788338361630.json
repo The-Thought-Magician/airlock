@@ -1,0 +1,54 @@
+{
+  "at": "2026-09-02T08:39:21.630Z",
+  "verdict": "netns blackout + unix-socket proxy bridge HOLDS — hard egress boundary without xt_owner",
+  "checks": [
+    {
+      "name": "bare netns is a total network blackout",
+      "expect": "curl fails (no interface, no route)",
+      "got": "code=000 exit=6",
+      "pass": true
+    },
+    {
+      "name": "proxy allows allowlisted host and refuses others",
+      "expect": "code=200 for api.github.com, non-200 for example.com",
+      "got": "code=200\nblocked=000",
+      "pass": true
+    },
+    {
+      "name": "jailed mcp reaches the ALLOWLISTED host through the bridge",
+      "expect": "code=200",
+      "got": "code=200 exit=0",
+      "pass": true
+    },
+    {
+      "name": "jailed mcp is REFUSED for a non-allowlisted host",
+      "expect": "non-200 (proxy denies)",
+      "got": "code=000 exit=56",
+      "pass": true
+    },
+    {
+      "name": "raw socket to a hardcoded IP is blocked (ignoring HTTP_PROXY does not help)",
+      "expect": "every destination blocked — no route exists",
+      "got": "blocked 140.82.121.6 OSError\nblocked 1.1.1.1 OSError\nblocked 8.8.8.8 OSError",
+      "pass": true
+    },
+    {
+      "name": "DNS from the jail is blocked (kills DNS-tunnel exfil)",
+      "expect": "resolution fails",
+      "got": "socket.gaierror: [Errno -3] Temporary failure in name resolution",
+      "pass": true
+    },
+    {
+      "name": "jailed mcp cannot setns back to the host namespace",
+      "expect": "nsenter denied (needs CAP_SYS_ADMIN)",
+      "got": "nsenter: cannot open /proc/1/ns/net: Permission denied\n exit=1",
+      "pass": true
+    }
+  ],
+  "sections": {
+    "install": "socat      /usr/bin/socat\ntinyproxy  /usr/bin/tinyproxy\nip         /usr/sbin/ip\nsetpriv    /usr/bin/setpriv\nunshare    /usr/bin/unshare\nuid=4000(mcp) gid=4000(mcp) groups=4000(mcp)",
+    "proxy setup (root netns)": "# allowlist contents:\n^api\\.github\\.com$\ntinyproxy_exit=0\nLISTEN 0      0          127.0.0.1:8888      0.0.0.0:*    users:((\"tinyproxy\",pid=508,fd=0))",
+    "unix-socket bridge": "srw-rw-rw- 1 root root 0 Sep  2 08:39 /run/airlock/proxy.sock\n# listener inside the netns:\nState  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess\nLISTEN 0      0          127.0.0.1:8888      0.0.0.0:*",
+    "tinyproxy log (the §3.6 audit source)": "DEBUG     Sep 02 08:39:13.847 [508]: sending stored logs\nNOTICE    Sep 02 08:39:13.857 [508]: Initializing tinyproxy ...\nNOTICE    Sep 02 08:39:13.863 [508]: Reloading config file\nNOTICE    Sep 02 08:39:13.870 [508]: Reloading config file finished\nDEBUG     Sep 02 08:39:13.880 [508]: done sending stored logs\nCONNECT   Sep 02 08:39:16.589 [508]: Connect (file descriptor 2): 127.0.0.1\nCONNECT   Sep 02 08:39:16.603 [508]: Request (file descriptor 2): CONNECT api.github.com:443 HTTP/1.1\nCONNECT   Sep 02 08:39:16.639 [508]: Established connection to host \"api.github.com\" using file descriptor 3.\nCONNECT   Sep 02 08:39:16.794 [508]: Connect (file descriptor 2): 127.0.0.1\nCONNECT   Sep 02 08:39:16.804 [508]: Request (file descriptor 2): CONNECT example.com:443 HTTP/1.1\nNOTICE    Sep 02 08:39:16.811 [508]: Proxying refused on filtered domain \"example.com\"\nCONNECT   Sep 02 08:39:20.798 [508]: Connect (file descriptor 2): 127.0.0.1\nCONNECT   Sep 02 08:39:20.805 [508]: Request (file descriptor 2): CONNECT api.github.com:443 HTTP/1.1\nCONNECT   Sep 02 08:39:20.838 [508]: Established connection to host \"api.github.com\" using file descriptor 3.\nCONNECT   Sep 02 08:39:21.597 [508]: Connect (file descriptor 2): 127.0.0.1\nCONNECT   Sep 02 08:39:21.604 [508]: Request (file descriptor 2): CONNECT example.com:443 HTTP/1.1\nNOTICE    Sep 02 08:39:21.611 [508]: Proxying refused on filtered domain \"example.com\""
+  }
+}

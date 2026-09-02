@@ -1,0 +1,66 @@
+{
+  "at": "2026-09-02T08:23:35.128Z",
+  "verdict": "§3.2 partially holds — review failures before claiming a hard boundary",
+  "checks": [
+    {
+      "name": "iptables + tinyproxy installable at snapshot-build time",
+      "expect": "both binaries present",
+      "got": "iptables=/usr/sbin/iptables tinyproxy=/usr/bin/tinyproxy",
+      "pass": true
+    },
+    {
+      "name": "unprivileged `mcp` user creatable",
+      "expect": "uid=4000",
+      "got": "uid=4000(mcp) gid=4000(mcp) groups=4000(mcp)",
+      "pass": true
+    },
+    {
+      "name": "baseline: mcp reaches the internet with no rules installed",
+      "expect": "HTTP 200 (unrestricted by default)",
+      "got": "200",
+      "pass": true
+    },
+    {
+      "name": "uid-keyed OUTPUT rules install and persist",
+      "expect": "rules accepted by the kernel and listed",
+      "got": "Warning: Extension owner revision 0 not supported, missing kernel module?\niptables v1.8.9 (nf_tables): Could not fetch rule set generation id: Invalid argument",
+      "pass": false
+    },
+    {
+      "name": "mcp curl is blocked by the kernel",
+      "expect": "non-200 / curl failure",
+      "got": "200 exit=0",
+      "pass": false
+    },
+    {
+      "name": "raw socket bypass (ignoring HTTP_PROXY) is blocked",
+      "expect": "BLOCKED — the rule is keyed to uid, not to env vars",
+      "got": "BLOCKED: TimeoutError",
+      "pass": true
+    },
+    {
+      "name": "DNS from mcp is blocked (kills DNS-tunnel exfil)",
+      "expect": "BLOCKED — UDP 53 is egress like anything else",
+      "got": "RESOLVED 104.20.23.154",
+      "pass": false
+    },
+    {
+      "name": "root/proxy uid retains egress",
+      "expect": "HTTP 200",
+      "got": "200",
+      "pass": true
+    },
+    {
+      "name": "allowlisted host (api.github.com) succeeds via the proxy",
+      "expect": "HTTP 200",
+      "got": "000",
+      "pass": false
+    },
+    {
+      "name": "non-allowlisted host (example.com) is refused",
+      "expect": "403 / connection refused, not 200",
+      "got": "000",
+      "pass": true
+    }
+  ]
+}

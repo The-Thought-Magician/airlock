@@ -1,0 +1,11 @@
+{
+  "at": "2026-09-02T08:36:06.776Z",
+  "sections": {
+    "install tooling": "iptables         /usr/sbin/iptables\niptables-legacy  /usr/sbin/iptables-legacy\niptables-nft     /usr/sbin/iptables-nft\nip               /usr/sbin/ip\nnsenter          /usr/bin/nsenter\nunshare          /usr/bin/unshare\ntinyproxy        /usr/bin/tinyproxy\nmodprobe         -\nss               /usr/bin/ss",
+    "kernel modules": "# lsmod:\nsh: 1: lsmod: not found\n# modprobe xt_owner:\nsh: 1: modprobe: not found\nmodprobe failed\n# /lib/modules:\nls: cannot access '/lib/modules': No such file or directory\n# netfilter in /proc/net:\nip_tables_matches\nip_tables_names\nip_tables_targets\nnetfilter\n# kernel config:\nno /proc/config.gz",
+    "A. iptables-legacy + owner match": "# legacy list:\nChain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination         \n# legacy owner match:\nWarning: Extension owner revision 0 not supported, missing kernel module?\niptables: No chain/target/match by that name.\nLEGACY_OWNER_FAILED",
+    "B. plain iptables rules (no owner match)": "# nft backend:\nWarning: Extension REJECT revision 0 not supported, missing kernel module?\niptables v1.8.9 (nf_tables): Could not fetch rule set generation id: Invalid argument\nNFT_PLAIN_FAILED\n# legacy backend:\nLEGACY_PLAIN_OK\n# does it actually block?\ncode=000 exit=7",
+    "C. netns + veth": "NETNS_CREATED\nError: Unknown device type.\nVETH_FAILED\nCannot find device \"veth-g\"\nCannot find device \"veth-h\"\nCannot find device \"veth-h\"\nCannot find device \"veth-g\"\nCannot find device \"veth-g\"\n# guest netns routes (no default route means no egress):\n# guest -> host veth endpoint reachable? (TCP, not ICMP)\nsh: 1: nc: not found\nnc_exit=127 (refused is fine, means routed)\n# guest -> internet (MUST fail):\ncode=000 exit=6\n# guest -> DNS (MUST fail):\nsocket.gaierror: [Errno -3] Temporary failure in name resolution",
+    "tinyproxy startup": "uid=101(tinyproxy) gid=102(tinyproxy) groups=102(tinyproxy)"
+  }
+}

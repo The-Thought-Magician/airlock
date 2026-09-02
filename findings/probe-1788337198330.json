@@ -1,0 +1,127 @@
+{
+  "at": "2026-09-02T08:19:58.329Z",
+  "template": "base",
+  "bootMs": 1426,
+  "latency": {
+    "samples": [
+      255.19823700000052,
+      255.89840600000025,
+      255.50832999999875,
+      255.31338700000015,
+      256.08184299999994,
+      256.6874950000001,
+      254.08694300000025,
+      255.690462999999,
+      256.65907400000106,
+      255.72988899999837,
+      256.3219420000005,
+      256.41761100000076,
+      254.9297579999984,
+      256.6998489999987,
+      258.6287819999998,
+      257.08956899999976,
+      281.34496899999976,
+      309.9897689999998,
+      515.1156169999995,
+      498.886982
+    ],
+    "p50": 256.41761100000076,
+    "p95": 515.1156169999995,
+    "mean": 285.11394574999974
+  },
+  "results": {
+    "id": {
+      "exitCode": 0,
+      "stdout": "uid=0(root) gid=0(root) groups=0(root)",
+      "stderr": "",
+      "note": "uid 0 => we can install the egress proxy and set iptables at build time"
+    },
+    "whoami": {
+      "exitCode": 0,
+      "stdout": "root",
+      "stderr": ""
+    },
+    "sudo": {
+      "exitCode": 0,
+      "stdout": "no passwordless sudo",
+      "stderr": ""
+    },
+    "iptables-present": {
+      "exitCode": 0,
+      "stdout": "ABSENT",
+      "stderr": ""
+    },
+    "iptables-list": {
+      "exitCode": 0,
+      "stdout": "sh: 1: iptables: not found",
+      "stderr": ""
+    },
+    "iptables-write": {
+      "exitCode": 0,
+      "stdout": "sh: 1: iptables: not found\nRULE_FAILED",
+      "stderr": "",
+      "note": "the actual §3.2 gate: can Airlock install owner-uid egress rules"
+    },
+    "iptables-owner-module": {
+      "exitCode": 0,
+      "stdout": "sh: 1: iptables: not found\nOWNER_MATCH_UNAVAILABLE",
+      "stderr": "",
+      "note": "uid-keyed DROP is what stops a server that ignores HTTP_PROXY"
+    },
+    "useradd": {
+      "exitCode": 0,
+      "stdout": "useradd present",
+      "stderr": "",
+      "note": "needed to create the unprivileged `mcp` user"
+    },
+    "capabilities": {
+      "exitCode": 0,
+      "stdout": "Current: =ep\nBounding set =cap_chown,cap_dac_override,cap_dac_read_search,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_linux_immutable,cap_net_bind_service,cap_net_broadcast,cap_net_admin,cap_net_raw,cap_ipc_lock,cap_ipc_owner,cap_sys_module,cap_sys_rawio,cap_sys_chroot,cap_sys_ptrace,cap_sys_pacct,cap_sys_admin,cap_sys_boot,cap_sys_nice,cap_sys_resource,cap_sys_time,cap_sys_tty_config,cap_mknod,cap_lease,cap_audit_write,cap_audit_control,cap_setfcap,cap_mac_override,cap_mac_admin,cap_syslog,cap_wake_alarm,cap_block_suspend,cap_audit_read,cap_perfmon,cap_bpf,cap_checkpoint_restore\nAmbient set =\nCurrent IAB: \nSecurebits: 00/0x0/1'b0 (no-new-privs=0)",
+      "stderr": ""
+    },
+    "net-namespace": {
+      "exitCode": 0,
+      "stdout": "unshare present",
+      "stderr": "",
+      "note": "fallback isolation path if iptables is unavailable"
+    },
+    "os": {
+      "exitCode": 0,
+      "stdout": "PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"",
+      "stderr": ""
+    },
+    "kernel": {
+      "exitCode": 0,
+      "stdout": "Linux localhost 6.6.30 #1 SMP PREEMPT_DYNAMIC Mon Jul 20 03:23:25 UTC 2026 x86_64 GNU/Linux",
+      "stderr": ""
+    },
+    "runtimes": {
+      "exitCode": 0,
+      "stdout": "node       /usr/bin/node\nnpm        /usr/bin/npm\nnpx        /usr/bin/npx\npython3    /usr/bin/python3\npip3       /usr/bin/pip3\nuv         -\nuvx        -\ncurl       /usr/bin/curl\nwget       -\ngit        /usr/bin/git\niptables   -\ntinyproxy  -\nsquid      -\nsocat      -",
+      "stderr": "",
+      "note": "decides whether the first snapshot needs a custom template"
+    },
+    "node-version": {
+      "exitCode": 0,
+      "stdout": "v18.20.4",
+      "stderr": ""
+    },
+    "python-version": {
+      "exitCode": 0,
+      "stdout": "Python 3.11.2",
+      "stderr": ""
+    },
+    "apt": {
+      "exitCode": 0,
+      "stdout": "apt-get present",
+      "stderr": "",
+      "note": "needed to install the egress proxy into the snapshot"
+    },
+    "outbound-net": {
+      "exitCode": 0,
+      "stdout": "https ok: 200",
+      "stderr": "",
+      "note": "confirms the sandbox has unrestricted egress by default — which is what §3.2 must fix"
+    }
+  }
+}
