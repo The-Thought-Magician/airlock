@@ -17,6 +17,7 @@ import {
   buildNetworkJail,
   installJailDependencies,
   installServer,
+  installRelayWrapper,
   jailCommand,
   readProxyLog,
   resolveEntrypoint,
@@ -24,8 +25,11 @@ import {
   syncMountsOut,
   verifyJail,
   WORKDIR,
+  WRAP_PREFIX,
 } from "./jail.js"
 import type { ServerPolicy } from "./config.js"
+import { hashToolSet } from "./tools-hash.js"
+import type { ToolDefinition } from "./mcp.js"
 
 export interface RelayOptions {
   policy: ServerPolicy
@@ -50,19 +54,24 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
   const startedAt = Date.now()
 
   if (Object.keys(policy.secrets).length > 0) {
-    // §3.3 is not built. Say so rather than letting the user assume the
-    // credential is being brokered when it is being handed over.
+    // `secrets` is plain env injection — the server really receives these. The
+    // brokered alternative (§3.3, the `broker` field) keeps the credential out
+    // of the server entirely; point at it rather than let the user assume these
+    // are protected.
     const names = Object.keys(policy.secrets).join(", ")
     log(
-      `WARNING: secrets (${names}) are passed through to the server verbatim. ` +
-        `Credential brokering (SPEC §3.3) is not implemented yet.`,
+      `WARNING: secrets (${names}) are injected into the server's environment verbatim — it can read them. ` +
+        `For a credential the server should never see, use a \`broker\` rule instead (SPEC §3.3).`,
     )
     audit.write({
       kind: "warn",
       at: new Date().toISOString(),
       server: policy.name,
-      message: `secrets passed through unbrokered: ${names}`,
+      message: `secrets passed through as env (not brokered): ${names}`,
     })
+  }
+  if (policy.broker.length > 0) {
+    log(`brokering ${policy.broker.length} credential(s) at the proxy — the server never receives them`)
   }
 
   const solari = new SolariClient({ apiKey })
@@ -173,6 +182,9 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
     const proxyEnv = await buildNetworkJail(sandbox, policy, log)
     // Fail closed: never hand traffic to a server whose jail did not verify.
     await verifyJail(sandbox, policy, log)
+    // Keeps the guest's stdout pure ASCII so multi-byte UTF-8 survives the SDK's
+    // per-frame decode (see WRAP_PATH). Cheap; installed on every launch.
+    await installRelayWrapper(sandbox)
 
     audit.write({
       kind: "session.start",
@@ -183,44 +195,115 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
       mounts: policy.mounts.map((m) => `${m.guestPath}:${m.mode}`),
     })
 
-    const jailed = jailCommand(entry)
+    const jailed = jailCommand(entry, { frame: true })
     log(`starting ${policy.package} inside the jail`)
 
     const inFlight = new Map<string | number, InFlight>()
+    // Drift is checked once, on the first tools/list result to come back.
+    let driftChecked = false
+
+    // The server's stdout is base64-framed by the guest wrapper (WRAP_PREFIX).
+    // Decode each framed line back to the exact JSON bytes before handling it;
+    // this is what makes multi-byte UTF-8 survive. A line without the prefix is
+    // unexpected (a server writing straight to fd 1, say) — pass it through raw
+    // rather than mangle it.
+    const decodeFramed = (line: string): string =>
+      line.startsWith(WRAP_PREFIX) ? Buffer.from(line.slice(WRAP_PREFIX.length), "base64").toString("utf8") : line
 
     // ---- server → client -------------------------------------------------
-    const fromServer = new LineReader((line) => {
-      // Pass through byte-identical. Parsing is for the audit trail only, and
-      // a parse failure must never stop a frame reaching the client.
-      process.stdout.write(line + "\n")
+    const handleServerLine = (line: string) => {
+      // §3.4: gate tools/list against the pinned definitions BEFORE forwarding.
+      // Everything else is passed through byte-identical; parsing it is for the
+      // audit trail only and must never stop a frame reaching the client.
+      let msg:
+        | {
+            id?: string | number
+            method?: string
+            result?: { isError?: boolean; tools?: ToolDefinition[] }
+            error?: unknown
+          }
+        | undefined
       try {
-        const msg = JSON.parse(line) as {
-          id?: string | number
-          method?: string
-          result?: { isError?: boolean }
-          error?: unknown
-        }
-        if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
-          const pending = inFlight.get(msg.id)
-          if (pending) {
-            inFlight.delete(msg.id)
-            if (pending.tool) {
-              audit.write({
-                kind: "tool.result",
-                at: new Date().toISOString(),
-                server: policy.name,
-                tool: pending.tool,
-                durationMs: Date.now() - pending.startedAt,
-                resultBytes: Buffer.byteLength(line, "utf8"),
-                isError: msg.error !== undefined || msg.result?.isError === true,
+        msg = JSON.parse(line)
+      } catch {
+        msg = undefined
+      }
+
+      // Tool-definition drift check. A rug pull changes the tools after you
+      // approved them; the jail contains exfiltration, but a poisoned tool
+      // *description* attacks the agent, not the sandbox, so it has to be caught
+      // here rather than trusted. If it drifts we replace the result with an
+      // error, so the client sees no tools rather than poisoned ones — the
+      // "block startup" behaviour §3.4 asks for. AIRLOCK_ALLOW_DRIFT=1 downgrades
+      // this to a warning for the case where the change was expected.
+      if (
+        !driftChecked &&
+        msg?.result?.tools !== undefined &&
+        typeof msg.id !== "undefined" &&
+        inFlight.get(msg.id)?.method === "tools/list"
+      ) {
+        driftChecked = true
+        if (policy.toolsHash) {
+          const liveHash = hashToolSet(msg.result.tools)
+          if (liveHash !== policy.toolsHash) {
+            const allow = process.env.AIRLOCK_ALLOW_DRIFT === "1"
+            log(`${allow ? "WARNING" : "BLOCKED"}: tool definitions have drifted from the pinned set.`)
+            log(`  pinned: ${policy.toolsHash}`)
+            log(`  live  : ${liveHash}`)
+            log(`  this is the rug-pull / tool-poisoning signature. Re-approve with \`airlock build ${policy.name} --update\`.`)
+            audit.write({
+              kind: "warn",
+              at: new Date().toISOString(),
+              server: policy.name,
+              message: `tool-definition drift: pinned ${policy.toolsHash}, live ${liveHash}${allow ? " (allowed)" : " (blocked)"}`,
+            })
+            if (!allow) {
+              // Substitute an error for this response; the original poisoned
+              // result never reaches the client.
+              const errorLine = JSON.stringify({
+                jsonrpc: "2.0",
+                id: msg.id,
+                error: {
+                  code: -32001,
+                  message:
+                    `airlock: tool definitions for "${policy.name}" changed since you approved them. ` +
+                    `Startup blocked to prevent a rug pull. Run \`airlock build ${policy.name} --update\` to review and re-approve, ` +
+                    `or set AIRLOCK_ALLOW_DRIFT=1 to bypass.`,
+                },
               })
+              process.stdout.write(errorLine + "\n")
+              inFlight.delete(msg.id)
+              return
             }
+          } else {
+            log("tool definitions match the pinned set")
           }
         }
-      } catch {
-        /* not our business — the client is the one that has to parse it */
       }
-    })
+
+      process.stdout.write(line + "\n")
+      if (msg && msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+        const pending = inFlight.get(msg.id)
+        if (pending) {
+          inFlight.delete(msg.id)
+          if (pending.tool) {
+            audit.write({
+              kind: "tool.result",
+              at: new Date().toISOString(),
+              server: policy.name,
+              tool: pending.tool,
+              durationMs: Date.now() - pending.startedAt,
+              resultBytes: Buffer.byteLength(line, "utf8"),
+              isError: msg.error !== undefined || msg.result?.isError === true,
+            })
+          }
+        }
+      }
+    }
+
+    // The wrapper's own lines are pure ASCII, so this LineReader never splits a
+    // multi-byte character; decoding happens per whole line, after reassembly.
+    const fromServer = new LineReader((framed) => handleServerLine(decodeFramed(framed)))
 
     const proc = await sandbox.commands.start(jailed.cmd, {
       args: jailed.args,

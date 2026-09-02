@@ -19,7 +19,11 @@
     "probe:template": "tsx scripts/probe-template.ts",
     "test:toml": "tsx scripts/test-toml-edit.ts",
     "probe:reliability": "tsx scripts/probe-template-reliability.ts",
-    "demo": "tsx demo/run-demo.ts"
+    "demo": "tsx demo/run-demo.ts",
+    "test:utf8": "tsx scripts/test-utf8.ts",
+    "test:drift": "tsx scripts/test-drift.ts",
+    "test:broker": "tsx scripts/test-broker.ts",
+    "test:inject": "tsx scripts/test-inject-scan.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",

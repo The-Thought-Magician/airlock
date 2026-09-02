@@ -239,6 +239,24 @@ audit log.
 
 ---
 
+## Addendum (2026-09-02, later): egress relies on the client honouring HTTP_PROXY
+
+Found while building credential brokering. The jail forces traffic through the
+proxy by having no route to anything else, and injects `HTTP_PROXY` /
+`HTTPS_PROXY` so proxy-aware clients use it. But **Node's built-in `fetch`
+(undici) ignores those variables.** A server that uses global `fetch` therefore
+cannot reach anything at all — it fails closed with a connection error rather
+than leaking, so it is *safe*, but the allowlisted host does not work either.
+
+- `curl`, `python-requests`, and most language HTTP stacks honour the proxy
+  variables and work, brokering included (`npm run test:broker` passes 3/3
+  through curl).
+- Node `fetch` needs an explicit `ProxyAgent`; the server would have to opt in.
+- This is a usability limitation, not a security hole — the failure mode is "no
+  network" not "unfiltered network". It belongs in `docs/LIMITATIONS.md`, and a
+  future mitigation is to inject a `NODE_OPTIONS` shim that installs a global
+  undici dispatcher pointed at the proxy.
+
 ## Reproducing
 
 ```bash

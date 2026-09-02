@@ -82,6 +82,7 @@ export class AuditLog {
 export function parseProxyLog(log: string, server: string, at: string): AuditEvent[] {
   const events: AuditEvent[] = []
   for (const line of log.split("\n")) {
+    // tinyproxy (plain allowlist path)
     const refused = line.match(/Proxying refused on filtered domain "([^"]+)"/)
     if (refused) {
       events.push({ kind: "net.attempt", at, server, host: refused[1], allowed: false, raw: line.trim() })
@@ -90,6 +91,19 @@ export function parseProxyLog(log: string, server: string, at: string): AuditEve
     const established = line.match(/Established connection to host "([^"]+)"/)
     if (established) {
       events.push({ kind: "net.attempt", at, server, host: established[1], allowed: true, raw: line.trim() })
+      continue
+    }
+    // mitmproxy broker addon (AIRLOCK BLOCK|ALLOW|INJECT <host> …)
+    const broker = line.match(/AIRLOCK (BLOCK|ALLOW|INJECT) (\S+)/)
+    if (broker) {
+      events.push({
+        kind: "net.attempt",
+        at,
+        server,
+        host: broker[2],
+        allowed: broker[1] !== "BLOCK",
+        raw: line.trim(),
+      })
     }
   }
   return events

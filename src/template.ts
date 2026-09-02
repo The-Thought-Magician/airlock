@@ -22,6 +22,7 @@ import {
   buildNetworkJail,
   installCommand,
   installedVersion,
+  installRelayWrapper,
   jailCommand,
   MCP_GID,
   MCP_UID,
@@ -129,8 +130,9 @@ export async function buildTemplate(
     const entry = await resolveEntrypoint(sandbox, policy)
     const proxyEnv = await buildNetworkJail(sandbox, policy, log)
     await verifyJail(sandbox, policy, log)
+    await installRelayWrapper(sandbox)
 
-    const jailed = jailCommand(entry)
+    const jailed = jailCommand(entry, { frame: true })
     let session!: McpSession
     const proc = await sandbox.commands.start(jailed.cmd, {
       args: jailed.args,
@@ -139,7 +141,7 @@ export async function buildTemplate(
       onStdout: (data) => session.push(data),
       onStderr: (data) => process.stderr.write(`  [server] ${data}`),
     })
-    session = new McpSession(proc)
+    session = new McpSession(proc, undefined, true)
 
     const serverInfo = await session.initialize("airlock-build")
     const tools = await session.listTools()
@@ -184,7 +186,8 @@ export async function readToolsFromTemplate(
     await sandbox.connect()
     const entry = await resolveEntrypoint(sandbox, policy)
     const proxyEnv = await buildNetworkJail(sandbox, policy, log)
-    const jailed = jailCommand(entry)
+    await installRelayWrapper(sandbox)
+    const jailed = jailCommand(entry, { frame: true })
     let session!: McpSession
     const proc = await sandbox.commands.start(jailed.cmd, {
       args: jailed.args,
@@ -193,7 +196,7 @@ export async function readToolsFromTemplate(
       onStdout: (data) => session.push(data),
       onStderr: () => {},
     })
-    session = new McpSession(proc)
+    session = new McpSession(proc, undefined, true)
     await session.initialize("airlock-build-diff")
     const tools = await session.listTools()
     await proc.kill().catch(() => {})

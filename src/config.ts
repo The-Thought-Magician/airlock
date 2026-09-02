@@ -62,6 +62,26 @@ export interface ServerPolicy {
   version?: string
   /** Tool-definition hash at build time (SPEC §3.4). */
   toolsHash?: string
+  /**
+   * Credential brokering (SPEC §3.3). Each rule injects a header into requests
+   * to one allowlisted host, at the egress proxy — so the real credential lives
+   * in Airlock, not in the server. The server holds nothing; reading its own
+   * env yields no secret.
+   *
+   * Because HTTPS is end-to-end encrypted, injecting a header means the proxy
+   * must terminate TLS (a MITM with a CA trusted inside the sandbox). That is a
+   * real escalation over the plain allowlist and is documented as such.
+   */
+  broker: BrokerRule[]
+}
+
+export interface BrokerRule {
+  /** The allowlisted host this injection applies to (exact match). */
+  host: string
+  /** Header name to set, e.g. "Authorization". */
+  header: string
+  /** The resolved header value (secret already read from its source). */
+  value: string
 }
 
 export interface AirlockConfig {
@@ -132,6 +152,56 @@ function parseMounts(v: unknown, server: string): Mount[] {
   })
 }
 
+/**
+ * Resolve a broker value from its source. `env:NAME` reads the local
+ * environment (so the real secret lives in the user's shell, never the policy
+ * file); anything else is a literal, which is really only for the demo — a
+ * literal secret committed to airlock.toml defeats the purpose.
+ */
+function resolveBrokerValue(raw: string, server: string, header: string): string {
+  if (raw.startsWith("env:")) {
+    const name = raw.slice(4)
+    const v = process.env[name]
+    if (v === undefined || v === "") {
+      throw new ConfigError(
+        `[server.${server}] broker for ${header} references env:${name}, but that variable is not set`,
+      )
+    }
+    return v
+  }
+  return raw
+}
+
+function parseBroker(v: unknown, server: string, egress: string[]): BrokerRule[] {
+  if (v === undefined) return []
+  if (!Array.isArray(v)) throw new ConfigError(`[server.${server}] broker must be an array of { host, header, value }`)
+  return v.map((entry, i) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new ConfigError(`[server.${server}] broker[${i}] must be a table with { host, header, value }`)
+    }
+    const e = entry as Record<string, unknown>
+    for (const k of ["host", "header", "value"]) {
+      if (typeof e[k] !== "string" || (e[k] as string).length === 0) {
+        throw new ConfigError(`[server.${server}] broker[${i}].${k} is required and must be a non-empty string`)
+      }
+    }
+    const host = e.host as string
+    // Injecting into a host that egress does not allow is a policy error: the
+    // request would be blocked before the header ever mattered.
+    if (!egress.includes(host)) {
+      throw new ConfigError(
+        `[server.${server}] broker[${i}] targets ${JSON.stringify(host)}, which is not in egress. ` +
+          `Add it to egress, or the request is blocked before brokering applies.`,
+      )
+    }
+    return {
+      host,
+      header: e.header as string,
+      value: resolveBrokerValue(e.value as string, server, e.header as string),
+    }
+  })
+}
+
 export function parseConfig(text: string, path: string): AirlockConfig {
   const raw = parseToml(text) as Record<string, unknown>
   const serverTable = (raw.server ?? {}) as Record<string, unknown>
@@ -174,6 +244,8 @@ export function parseConfig(text: string, path: string): AirlockConfig {
     // Fail at parse time, not when tinyproxy silently refuses everything.
     for (const d of egress) domainToEre(d)
 
+    const broker = parseBroker(value.broker, name, egress)
+
     servers[name] = {
       name,
       launcher: launcher as Launcher,
@@ -186,6 +258,7 @@ export function parseConfig(text: string, path: string): AirlockConfig {
       template: typeof value.template === "string" && value.template.length > 0 ? value.template : undefined,
       version: typeof value.version === "string" && value.version.length > 0 ? value.version : undefined,
       toolsHash: typeof value.tools_hash === "string" && value.tools_hash.length > 0 ? value.tools_hash : undefined,
+      broker,
     }
 
     // The field was renamed when snapshots were measured and dropped. Say so

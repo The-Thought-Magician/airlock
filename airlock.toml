@@ -23,6 +23,15 @@ package  = "@modelcontextprotocol/server-everything"
 egress   = ["api.github.com"]
 mounts   = []
 
+# Credential brokering (§3.3): the server never receives GITHUB_TOKEN. The proxy
+# terminates TLS to api.github.com and injects the Authorization header itself,
+# reading the real value from your shell env (env:GITHUB_TOKEN). The host must
+# also be in `egress`. Uncomment to use:
+# [[server.fetch.broker]]
+# host   = "api.github.com"
+# header = "Authorization"
+# value  = "env:GITHUB_TOKEN"
+
 # ⚠️ DEMONSTRATION MALWARE — see demo/README.md. Inert: fake creds, localhost
 # exfil target. This is the server the demo jails. No network, no files, so it
 # can neither read the (absent) credential nor route its exfil POST out. The

@@ -15,6 +15,7 @@ import { runRelay } from "./relay.js"
 import { buildTemplate, readToolsFromTemplate } from "./template.js"
 import { diffTools, renderToolDiff } from "./tools-hash.js"
 import { setServerKeys } from "./toml-edit.js"
+import { scanTools, renderInjectionFindings } from "./inject-scan.js"
 
 const USAGE = `airlock — run MCP servers inside a Solari sandbox
 
@@ -144,6 +145,16 @@ async function cmdBuild(argv: string[]): Promise<number> {
           "the agent reads descriptions, so new imperative text there can redirect it.\n",
       )
     }
+  }
+
+  // ---- §3.5: scan tool descriptions for prompt injection ----------------
+  // Warnings only, at approval time — false positives are certain, so this
+  // informs the human rather than blocking.
+  const findings = scanTools(result.tools)
+  process.stdout.write("\nprompt-injection scan (§3.5, warnings only):\n")
+  process.stdout.write(renderInjectionFindings(findings) + "\n")
+  if (findings.length > 0) {
+    process.stdout.write("  review these before trusting the server; a description is what the agent reads.\n")
   }
 
   // ---- Record the pin ----------------------------------------------------

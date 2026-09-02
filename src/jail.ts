@@ -21,6 +21,7 @@
  */
 import type { Sandbox } from "@solarisdk/core"
 import { domainToEre, type ServerPolicy } from "./config.js"
+import { startBrokerProxy } from "./broker.js"
 
 export const MCP_UID = 4000
 export const MCP_GID = 4000
@@ -35,6 +36,64 @@ export const WORKDIR = "/home/mcp/work"
  * so a compromised server cannot persist a change into the next session.
  */
 export const LOCAL_SERVER_DIR = "/opt/airlock-server"
+/** Where the uvx launcher installs tool venvs and their console scripts. */
+export const UV_TOOL_DIR = "/opt/uv-tools"
+export const UV_BIN_DIR = "/usr/local/bin"
+
+/**
+ * Path to the stdout-framing wrapper (see WRAP_PREFIX).
+ *
+ * The Solari SDK decodes each `cmd.data` frame with a fresh `TextDecoder` and no
+ * streaming flag, so a multi-byte UTF-8 character split across two frames is
+ * corrupted into replacement characters before Airlock can see it. Confirmed
+ * live: a 624 KB emoji/CJK payload came back with 30 U+FFFD substitutions
+ * (`npm run test:utf8`).
+ *
+ * The fix is to keep the guest's stdout pure ASCII. This wrapper spawns the real
+ * server, base64-encodes each of its stdout lines (prefixed so Airlock can tell
+ * framed lines from stray output), and passes stdin straight through — the input
+ * path is not affected because Airlock base64-encodes each whole line itself.
+ */
+export const WRAP_PATH = "/opt/airlock-wrap.cjs"
+export const WRAP_PREFIX = "A64:"
+
+const WRAP_SOURCE = `#!/usr/bin/env node
+// Airlock stdout-framing wrapper. Generated; do not edit in the guest.
+"use strict"
+const { spawn } = require("child_process")
+const PREFIX = ${JSON.stringify(WRAP_PREFIX)}
+const cmd = process.argv[2]
+const args = process.argv.slice(3)
+const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] })
+// stdin: Airlock -> wrapper -> server, byte-for-byte.
+process.stdin.pipe(child.stdin)
+// stdout: server -> wrapper, one base64 line per server line. Buffer-based so
+// the framing is exact regardless of where chunk boundaries fall.
+let buf = Buffer.alloc(0)
+child.stdout.on("data", (chunk) => {
+  buf = Buffer.concat([buf, chunk])
+  let nl
+  while ((nl = buf.indexOf(0x0a)) !== -1) {
+    const line = buf.subarray(0, nl)
+    buf = buf.subarray(nl + 1)
+    process.stdout.write(PREFIX + line.toString("base64") + "\\n")
+  }
+})
+child.on("exit", (code, signal) => {
+  if (buf.length > 0) process.stdout.write(PREFIX + buf.toString("base64") + "\\n")
+  process.exit(code == null ? (signal ? 1 : 0) : code)
+})
+child.on("error", (err) => {
+  process.stderr.write("airlock-wrap: " + err.message + "\\n")
+  process.exit(127)
+})
+`
+
+/** Install the framing wrapper. Cheap; run on every launch, both paths. */
+export async function installRelayWrapper(sandbox: Sandbox): Promise<void> {
+  await sandbox.files.write(WRAP_PATH, WRAP_SOURCE)
+  must(await sh(sandbox, `chown root:root ${WRAP_PATH} && chmod 555 ${WRAP_PATH}`), "installing the relay wrapper")
+}
 
 /** Where a launcher's entrypoint ended up, and how to invoke it. */
 export interface Entrypoint {
@@ -164,14 +223,22 @@ export function installCommand(policy: ServerPolicy): string {
     case "python":
       return `pip3 install --break-system-packages --quiet ${JSON.stringify(policy.package)}`
     case "uvx":
-      throw new Error(
-        'the uvx launcher is not implemented yet (uv is not in the base image). Use launcher = "npx" or "python".',
-      )
+      // `uvx <pkg>` normally fetches on first run, but the jail has no network,
+      // so the tool must be installed ahead of time. `uv tool install` builds a
+      // venv and drops console scripts into UV_TOOL_BIN_DIR. Everything is made
+      // world-readable/executable so the unprivileged mcp user can run it, and
+      // owned by root so it cannot rewrite it.
+      return [
+        "pip3 install --break-system-packages --quiet uv",
+        `UV_TOOL_BIN_DIR=${UV_BIN_DIR} UV_TOOL_DIR=${UV_TOOL_DIR} uv tool install ${JSON.stringify(policy.package)}`,
+        `chmod -R a+rX ${UV_TOOL_DIR} ${UV_BIN_DIR}`,
+      ].join(" && ")
   }
 }
 
 export async function installServerPackage(sandbox: Sandbox, policy: ServerPolicy, log: Logger): Promise<void> {
-  log(`installing ${policy.launcher === "npx" ? "npm" : "pip"} package ${policy.package}…`)
+  const kind = policy.launcher === "npx" ? "npm" : policy.launcher === "uvx" ? "uv tool" : "pip"
+  log(`installing ${kind} package ${policy.package}…`)
   must(await sh(sandbox, installCommand(policy), 600_000), `installing ${policy.package}`)
 }
 
@@ -222,10 +289,23 @@ export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy):
       return { cmd: "node", args: [`${LOCAL_SERVER_DIR}/${main}`, ...policy.args] }
     }
 
-    case "uvx":
-      throw new Error(
-        'the uvx launcher is not implemented yet (uv is not in the base image). Use launcher = "npx" or "python".',
+    case "uvx": {
+      // Ask uv what executable it actually installed rather than guessing from
+      // the package name; `uv tool list` prints the tool and its entry points:
+      //   mcp-server-time v0.1.0
+      //   - mcp-server-time
+      const probe = must(
+        await sh(sandbox, `UV_TOOL_DIR=${UV_TOOL_DIR} uv tool list 2>/dev/null`),
+        `listing uv tools for ${policy.package}`,
       )
+      const exe = probe.stdout
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith("- "))
+        .map((l) => l.slice(2).trim())[0]
+      if (!exe) throw new Error(`uv installed no executable for ${policy.package}`)
+      return { cmd: `${UV_BIN_DIR}/${exe}`, args: [...policy.args] }
+    }
   }
 }
 
@@ -233,10 +313,15 @@ export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy):
 export async function installedVersion(sandbox: Sandbox, policy: ServerPolicy): Promise<string | undefined> {
   if (policy.launcher === "local") return undefined
   const name = packageName(policy.package)
-  const out =
-    policy.launcher === "npx"
-      ? await sh(sandbox, `node -e 'console.log(require("${"$"}(npm root -g)/${name}/package.json").version)' 2>/dev/null || true`)
-      : await sh(sandbox, `pip3 show ${JSON.stringify(name)} 2>/dev/null | sed -n 's/^Version: //p' || true`)
+  let out
+  if (policy.launcher === "npx") {
+    out = await sh(sandbox, `node -e 'console.log(require("${"$"}(npm root -g)/${name}/package.json").version)' 2>/dev/null || true`)
+  } else if (policy.launcher === "uvx") {
+    // `uv tool list` prints "<name> vX.Y.Z"; pull the version off that line.
+    out = await sh(sandbox, `UV_TOOL_DIR=${UV_TOOL_DIR} uv tool list 2>/dev/null | sed -n 's/.* v\\([0-9][^ ]*\\).*/\\1/p' | head -1`)
+  } else {
+    out = await sh(sandbox, `pip3 show ${JSON.stringify(name)} 2>/dev/null | sed -n 's/^Version: //p' || true`)
+  }
   const v = out.stdout.trim().split("\n").filter(Boolean).pop()
   return v && /^\d/.test(v) ? v : undefined
 }
@@ -356,50 +441,59 @@ export async function buildNetworkJail(
 
   log(`egress: ${policy.egress.join(", ")}`)
 
-  // The allowlist and config go in as files — see the header note on quoting.
-  await sandbox.files.write(
-    "/etc/tinyproxy/airlock-allowlist",
-    policy.egress.map(domainToEre).join("\n") + "\n",
-  )
-  await sandbox.files.write(
-    "/etc/tinyproxy/airlock.conf",
-    [
-      "User tinyproxy",
-      "Group tinyproxy",
-      `Port ${PROXY_PORT}`,
-      "Listen 127.0.0.1",
-      "Timeout 600",
-      // "Connect" level logs every allow and every refusal, which is the
-      // evidence `airlock log --blocked` reads (SPEC §3.6).
-      "LogLevel Connect",
-      `LogFile "${PROXY_LOG}"`,
-      'PidFile "/run/tinyproxy.pid"',
-      "MaxClients 50",
-      "Allow 127.0.0.1",
-      'Filter "/etc/tinyproxy/airlock-allowlist"',
-      "FilterDefaultDeny Yes",
-      "FilterType ere",
-      "ConnectPort 443",
-      "",
-    ].join("\n"),
-  )
-
-  must(
-    await sh(
-      sandbox,
+  // Two proxy backends share the same netns + unix-socket bridge below. When the
+  // policy brokers credentials we need a TLS-terminating proxy (mitmproxy, in
+  // broker.ts); otherwise the lighter tinyproxy tunnels HTTPS and enforces the
+  // allowlist. Both listen on PROXY_PORT and log to PROXY_LOG.
+  let caEnv: Record<string, string> = {}
+  if (policy.broker.length > 0) {
+    caEnv = await startBrokerProxy(sandbox, policy, log)
+  } else {
+    // The allowlist and config go in as files — see the header note on quoting.
+    await sandbox.files.write(
+      "/etc/tinyproxy/airlock-allowlist",
+      policy.egress.map(domainToEre).join("\n") + "\n",
+    )
+    await sandbox.files.write(
+      "/etc/tinyproxy/airlock.conf",
       [
-        "set -e",
-        // Restart cleanly in case a snapshot restored a running instance.
-        "if [ -f /run/tinyproxy.pid ]; then kill \"$(cat /run/tinyproxy.pid)\" 2>/dev/null || true; fi",
-        "pkill -f 'socat UNIX-LISTEN:/run/airlock' 2>/dev/null || true",
-        `pkill -f 'socat TCP-LISTEN:${PROXY_PORT}' 2>/dev/null || true`,
-        "sleep 1",
-        "tinyproxy -c /etc/tinyproxy/airlock.conf",
-        "sleep 1",
+        "User tinyproxy",
+        "Group tinyproxy",
+        `Port ${PROXY_PORT}`,
+        "Listen 127.0.0.1",
+        "Timeout 600",
+        // "Connect" level logs every allow and every refusal, which is the
+        // evidence `airlock log --blocked` reads (SPEC §3.6).
+        "LogLevel Connect",
+        `LogFile "${PROXY_LOG}"`,
+        'PidFile "/run/tinyproxy.pid"',
+        "MaxClients 50",
+        "Allow 127.0.0.1",
+        'Filter "/etc/tinyproxy/airlock-allowlist"',
+        "FilterDefaultDeny Yes",
+        "FilterType ere",
+        "ConnectPort 443",
+        "",
       ].join("\n"),
-    ),
-    "starting the filtering proxy",
-  )
+    )
+
+    must(
+      await sh(
+        sandbox,
+        [
+          "set -e",
+          // Restart cleanly in case a snapshot restored a running instance.
+          "if [ -f /run/tinyproxy.pid ]; then kill \"$(cat /run/tinyproxy.pid)\" 2>/dev/null || true; fi",
+          "pkill -f 'socat UNIX-LISTEN:/run/airlock' 2>/dev/null || true",
+          `pkill -f 'socat TCP-LISTEN:${PROXY_PORT}' 2>/dev/null || true`,
+          "sleep 1",
+          "tinyproxy -c /etc/tinyproxy/airlock.conf",
+          "sleep 1",
+        ].join("\n"),
+      ),
+      "starting the filtering proxy",
+    )
+  }
 
   // Bridge: unix socket in the shared filesystem crosses the namespace.
   must(
@@ -436,6 +530,9 @@ export async function buildNetworkJail(
     HTTPS_PROXY: proxyUrl,
     NO_PROXY: "127.0.0.1,localhost",
     no_proxy: "127.0.0.1,localhost",
+    // Empty unless brokering; makes the server's HTTPS client trust the
+    // interception CA so the proxy can inject credentials.
+    ...caEnv,
   }
 }
 
@@ -445,7 +542,11 @@ export async function buildNetworkJail(
  * `--no-new-privs` is what stops the process re-acquiring CAP_SYS_ADMIN and
  * using setns to walk back out of the namespace.
  */
-export function jailCommand(entry: Entrypoint): Entrypoint {
+export function jailCommand(entry: Entrypoint, opts: { frame?: boolean } = {}): Entrypoint {
+  // `frame` routes the process through the base64 stdout wrapper (WRAP_PATH).
+  // The server launch needs it (to survive multi-byte UTF-8); the verifyJail
+  // probe does not, because it reads command output directly, not as protocol.
+  const inner = opts.frame ? { cmd: "node", args: [WRAP_PATH, entry.cmd, ...entry.args] } : entry
   return {
     cmd: "ip",
     args: [
@@ -457,8 +558,8 @@ export function jailCommand(entry: Entrypoint): Entrypoint {
       `--regid=${MCP_GID}`,
       "--clear-groups",
       "--no-new-privs",
-      entry.cmd,
-      ...entry.args,
+      inner.cmd,
+      ...inner.args,
     ],
   }
 }

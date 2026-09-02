@@ -8,6 +8,7 @@
  */
 import type { CommandHandle } from "@solarisdk/core"
 import { LineReader, encode, type JsonRpcResponse } from "./jsonrpc.js"
+import { WRAP_PREFIX } from "./jail.js"
 
 export const PROTOCOL_VERSION = "2025-06-18"
 
@@ -28,11 +29,20 @@ export class McpSession {
   private readonly pending = new Map<number, (r: JsonRpcResponse) => void>()
   private readonly reader: LineReader
 
+  /**
+   * @param framed  when true, the server was launched through the base64
+   *   stdout wrapper, so each line is `A64:<base64>` and must be decoded before
+   *   parsing. Match this to how the process was started.
+   */
   constructor(
     private readonly proc: CommandHandle,
     private readonly onStderr?: (line: string) => void,
+    private readonly framed = false,
   ) {
-    this.reader = new LineReader((line) => {
+    this.reader = new LineReader((raw) => {
+      const line = this.framed && raw.startsWith(WRAP_PREFIX)
+        ? Buffer.from(raw.slice(WRAP_PREFIX.length), "base64").toString("utf8")
+        : raw
       let msg: JsonRpcResponse
       try {
         msg = JSON.parse(line)
