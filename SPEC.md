@@ -333,7 +333,11 @@ route; DNS resolution fails; `nsenter` to the host namespace denied.
 > `docs/FINDINGS-WARMSTART.md`.
 >
 > Snapshots are out. **Custom templates** deliver everything this section
-> actually wanted, at 11.4 s.
+> actually wanted, at 11.4 s — but they proved unreliable on a second look
+> (0/4 creates with `No sandbox host available` on a `ready` template, while
+> `base` was 4/4). So pinning is **best-effort**: `airlock run` falls back to a
+> cold provision, loudly, and the isolation boundary in §3 is what this project
+> actually rests on.
 
 The value here was never really speed — provisioning is only 9.3 s. It is that
 the build is *pinned*: immutable, reproducible, and shareable. A custom template
@@ -347,10 +351,12 @@ gives all three and is the ordinary `create` path.
 2. `templates.build()` → a `tpl_…` id. One-off cost: **22.5 s**.
 3. Record the template id against the server's policy entry, alongside the
    resolved package version.
-4. Every subsequent launch is `create({ template: "tpl_…" })` — **11.4 s**, and
-   consistent (10.9 / 11.3 / 11.9 s).
-5. With no pinned template, `airlock run` provisions cold (**12.3 s**) so the
-   tool works before anything has been built.
+4. Every subsequent launch is `create({ template: "tpl_…" })` — **11.4 s** when
+   it works, but see the reliability caveat above.
+5. With no pinned template, or when a pinned one cannot be created,
+   `airlock run` provisions cold so the tool keeps working. Falling back warns
+   on stderr and writes a `warn` event to the audit log, because the isolation
+   boundary survives but the version pin does not.
 
 ### 4.2 What this buys
 
@@ -384,7 +390,7 @@ they do.
 | Prerequisite | Docker daemon, image builds, disk | An API key |
 | Locked-down corporate laptop | Often not permitted | Works |
 | Blast radius of an escape | Your machine | Someone else's cloud |
-| Cold start | Seconds, plus image pull | ~11 s from a pinned template, measured. **Docker wins this row** once its image is cached locally — say so |
+| Cold start | Seconds, plus image pull | Highly variable: 1.6 s–125 s for a plain create under differing platform load. **Docker wins this row** — say so |
 | Version pinning | Possible, manual, verbose | A committed `tpl_…` id |
 | Team-wide policy | Bespoke tooling | A committed config file |
 | Local resource cost | Your CPU and RAM | None |

@@ -19,6 +19,7 @@ import {
   installServer,
   jailCommand,
   readProxyLog,
+  resolveEntrypoint,
   syncMountsIn,
   syncMountsOut,
   verifyJail,
@@ -66,13 +67,51 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
 
   const solari = new SolariClient({ apiKey })
   const bootStart = Date.now()
-  const sandbox: Sandbox = await solari.sandboxes.create({
-    template: "base",
-    ...(policy.snapshot ? { fromSnapshot: policy.snapshot } : {}),
+  const createOpts = {
     timeoutMs: opts.timeoutMs ?? 10 * 60_000,
     metadata: { airlock: "run", server: policy.name },
-  })
-  log(`sandbox ${sandbox.sandboxId.slice(0, 16)}… up in ${Date.now() - bootStart}ms`)
+  }
+
+  // A pinned template contains the jail dependencies and the server at a fixed
+  // version (§4). Without one we use `base` and provision cold, so Airlock
+  // works before anything has been built.
+  //
+  // Custom templates have proven unreliable: measured 0/4 successes with
+  // `No sandbox host available` on a template whose own status was `ready`,
+  // while `base` was 4/4 in the same run (findings/template-reliability-*.json).
+  // So the pin is best-effort, and losing it must not take the user's editor
+  // down with it.
+  let pinned = policy.template !== undefined
+  let sandbox: Sandbox
+  try {
+    sandbox = await solari.sandboxes.create({ template: policy.template ?? "base", ...createOpts })
+  } catch (err) {
+    if (!pinned) throw err
+    const reason = err instanceof Error ? err.message : String(err)
+    // Loud, not silent. The isolation boundary is unaffected — the jail is
+    // rebuilt either way — but the supply-chain guarantee is: we are now
+    // running whatever the registry serves today, not the build that was
+    // vetted. That is a real downgrade and the user has to be told.
+    log(`WARNING: pinned template ${policy.template} could not be created (${reason}).`)
+    log(`WARNING: falling back to a cold provision. Isolation is unchanged, but the version pin is LOST —`)
+    log(`WARNING: this installs ${policy.package} as published right now, not the build you vetted.`)
+    audit.write({
+      kind: "warn",
+      at: new Date().toISOString(),
+      server: policy.name,
+      message: `pinned template ${policy.template} unavailable (${reason}); provisioned cold, version pin lost`,
+    })
+    pinned = false
+    sandbox = await solari.sandboxes.create({ template: "base", ...createOpts })
+  }
+
+  log(
+    `sandbox ${sandbox.sandboxId.slice(0, 16)}… up in ${Date.now() - bootStart}ms` +
+      (pinned ? ` from pinned template ${policy.template}` : " (provisioning cold)"),
+  )
+  if (!pinned && policy.template === undefined) {
+    log(`hint: \`airlock build ${policy.name}\` pins an immutable build, so upstream changes cannot land silently`)
+  }
 
   let exitCode = 0
   let killed = false
@@ -117,11 +156,19 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
   try {
     await sandbox.connect()
 
-    // Order matters: the jail's dependencies and the server itself are
-    // installed as root with the network up, and only then is the jail closed
+    // Order matters: the jail's dependencies and the server itself are put in
+    // place as root with the network up, and only then is the jail closed
     // around the launch. Nothing third-party runs before the boundary exists.
-    await installJailDependencies(sandbox, log)
-    const entry = await installServer(sandbox, policy, log)
+    //
+    // With a pinned template both are already baked in, so we only need to
+    // resolve the entrypoint — one round trip instead of an apt and an install.
+    let entry
+    if (pinned) {
+      entry = await resolveEntrypoint(sandbox, policy)
+    } else {
+      await installJailDependencies(sandbox, log)
+      entry = await installServer(sandbox, policy, log)
+    }
     await syncMountsIn(sandbox, policy, log)
     const proxyEnv = await buildNetworkJail(sandbox, policy, log)
     // Fail closed: never hand traffic to a server whose jail did not verify.

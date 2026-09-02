@@ -1,4 +1,4 @@
-# Warm-start findings — snapshots lose
+# Warm-start findings — snapshots lose, and templates are flaky
 
 Measured 2026-09-02 against live sandboxes. Reproduce with
 `npm run probe:warmstart2` and `npm run probe:template`; raw output in
@@ -7,6 +7,10 @@ Measured 2026-09-02 against live sandboxes. Reproduce with
 **This supersedes `SPEC.md` §4 and the "Cold start" row of §5.** The spec's
 claim that snapshot restore is "milliseconds" and that this is what makes
 Solari load-bearing is not what the API does.
+
+> **Read the "Update, ~90 minutes later" section before acting on the
+> recommendation.** Custom templates looked like the answer at 3/3 successes,
+> then went 0/4. Cold provisioning from `base` is the dependable path.
 
 ---
 
@@ -70,7 +74,63 @@ the better half to keep.
 
 ---
 
-## Recommendation: custom templates instead of snapshots
+## Update, ~90 minutes later: custom templates are not dependable
+
+The recommendation below was written on 3/3 successful creates from a custom
+template at 11.4s. It did not survive the afternoon.
+
+The same template, status still `ready`, then failed **0/4** while `base`
+succeeded **4/4** in the same alternating run
+(`findings/template-reliability-*.json`):
+
+```
+round 1  ok    base                   1.59s
+round 1  FAIL  tpl_6c4dedb93a204a0e   28.27s  No sandbox host available
+round 2  ok    base                  63.05s
+round 2  FAIL  tpl_6c4dedb93a204a0e   14.15s  No sandbox host available
+round 3  ok    base                   2.22s
+round 3  FAIL  tpl_6c4dedb93a204a0e   12.66s  No sandbox host available
+round 4  ok    base                 125.48s
+round 4  FAIL  tpl_6c4dedb93a204a0e   12.98s  No sandbox host available
+```
+
+Alternating the two was the point: if both failed together it would be a
+platform-wide capacity dip. Only the custom template failed, so it is specific
+to custom templates — a `ready` template can be uncreatable.
+
+Two consequences:
+
+1. **Cold provisioning from `base` is the only dependable path**, and stays the
+   default. `airlock build` is implemented and works when the platform serves
+   the template, but it cannot be presented as the happy path.
+2. **`airlock run` falls back**, loudly. If a pinned template cannot be
+   created it provisions cold, warns three times on stderr, and writes a `warn`
+   event to the audit log. The isolation boundary is unaffected — the jail is
+   rebuilt either way — but the *version pin* is lost, meaning the server is
+   installed as published right now rather than as vetted. Silently degrading a
+   supply-chain guarantee would be worse than not offering one.
+
+Verified: with the template uncreatable, the end-to-end suite still passes
+12/12 through the fallback.
+
+### And the timings are not stable either
+
+Those same four rounds put `base` create at 1.59s, 63.05s, 2.22s and 125.48s.
+One cold provision in the e2e run took 385s. The 12.32s baseline in the table
+above was real when measured, but platform load moves it by an order of
+magnitude, so no number here should be quoted as a constant.
+
+**What this means for the project's story.** The security value is in §3 — the
+netns jail, which is built inside a sandbox we control and has not failed once
+across every run. §4 was always the weaker claim, and it is weaker still: it is
+a supply-chain nicety the platform does not reliably support. The README should
+lead with isolation and mention pinning as best-effort, not the reverse.
+
+---
+
+## Recommendation as originally written: custom templates instead of snapshots
+
+*(Kept for the reasoning; superseded on reliability by the update above.)*
 
 A custom template delivers all three surviving benefits and is *also*
 marginally faster than provisioning:

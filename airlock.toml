@@ -13,6 +13,8 @@ launcher = "npx"
 package  = "@modelcontextprotocol/server-everything"
 egress   = []
 mounts   = []
+template = "tpl_6c4dedb93a204a0e"
+tools_hash = "sha256:fb2332dab66d01657fd45f3f394cdd92"
 
 # A server that legitimately needs one host and nothing else.
 [server.fetch]

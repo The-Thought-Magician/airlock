@@ -1,0 +1,58 @@
+{
+  "at": "2026-09-02T13:53:54.539Z",
+  "templateId": "tpl_6c4dedb93a204a0e",
+  "attempts": [
+    {
+      "template": "base",
+      "round": 1,
+      "ok": true,
+      "ms": 1585.283122
+    },
+    {
+      "template": "tpl_6c4dedb93a204a0e",
+      "round": 1,
+      "ok": false,
+      "ms": 28266.969266,
+      "error": "No sandbox host available"
+    },
+    {
+      "template": "base",
+      "round": 2,
+      "ok": true,
+      "ms": 63048.81334
+    },
+    {
+      "template": "tpl_6c4dedb93a204a0e",
+      "round": 2,
+      "ok": false,
+      "ms": 14151.280496000007,
+      "error": "No sandbox host available"
+    },
+    {
+      "template": "base",
+      "round": 3,
+      "ok": true,
+      "ms": 2223.8453979999904
+    },
+    {
+      "template": "tpl_6c4dedb93a204a0e",
+      "round": 3,
+      "ok": false,
+      "ms": 12661.733389999994,
+      "error": "No sandbox host available"
+    },
+    {
+      "template": "base",
+      "round": 4,
+      "ok": true,
+      "ms": 125479.631341
+    },
+    {
+      "template": "tpl_6c4dedb93a204a0e",
+      "round": 4,
+      "ok": false,
+      "ms": 12980.154127000016,
+      "error": "No sandbox host available"
+    }
+  ]
+}

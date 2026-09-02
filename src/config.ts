@@ -41,8 +41,18 @@ export interface ServerPolicy {
    * when this is non-empty.
    */
   secrets: Record<string, string>
-  /** Snapshot pinned on first run (SPEC §4). */
-  snapshot?: string
+  /**
+   * Pinned template minted by `airlock build` (SPEC §4).
+   *
+   * The spec originally pinned a snapshot here. Snapshots lost on measurement
+   * — restore is ~4x slower than provisioning cold, and `revert()` is
+   * unavailable — so the pin is a `tpl_…` id. See docs/FINDINGS-WARMSTART.md.
+   */
+  template?: string
+  /** Version that landed in the template, recorded by `airlock build`. */
+  version?: string
+  /** Tool-definition hash at build time (SPEC §3.4). */
+  toolsHash?: string
 }
 
 export interface AirlockConfig {
@@ -159,7 +169,19 @@ export function parseConfig(text: string, path: string): AirlockConfig {
       egress,
       mounts: parseMounts(value.mounts, name),
       secrets,
-      snapshot: typeof value.snapshot === "string" && value.snapshot.length > 0 ? value.snapshot : undefined,
+      template: typeof value.template === "string" && value.template.length > 0 ? value.template : undefined,
+      version: typeof value.version === "string" && value.version.length > 0 ? value.version : undefined,
+      toolsHash: typeof value.tools_hash === "string" && value.tools_hash.length > 0 ? value.tools_hash : undefined,
+    }
+
+    // The field was renamed when snapshots were measured and dropped. Say so
+    // rather than silently ignoring a key the user believes is doing something.
+    if (typeof value.snapshot === "string") {
+      throw new ConfigError(
+        `[server.${name}] \`snapshot\` is no longer supported — snapshot restore measured ~4x slower ` +
+          `than provisioning cold (see docs/FINDINGS-WARMSTART.md). Run \`airlock build ${name}\` ` +
+          `to mint a template and replace it with \`template = "tpl_…"\`.`,
+      )
     }
   }
 

@@ -16,7 +16,9 @@
     "e2e": "tsx scripts/e2e-airlock.ts",
     "probe:warmstart": "tsx scripts/probe-warmstart.ts",
     "probe:warmstart2": "tsx scripts/probe-warmstart2.ts",
-    "probe:template": "tsx scripts/probe-template.ts"
+    "probe:template": "tsx scripts/probe-template.ts",
+    "test:toml": "tsx scripts/test-toml-edit.ts",
+    "probe:reliability": "tsx scripts/probe-template-reliability.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",

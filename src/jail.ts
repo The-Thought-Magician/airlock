@@ -93,24 +93,52 @@ export async function installJailDependencies(sandbox: Sandbox, log: Logger): Pr
  * Returns how to invoke the installed entrypoint.
  */
 export async function installServer(sandbox: Sandbox, policy: ServerPolicy, log: Logger): Promise<Entrypoint> {
+  await installServerPackage(sandbox, policy, log)
+  return resolveEntrypoint(sandbox, policy)
+}
+
+/** Strip any version suffix: `@scope/pkg@1.2.3` → `@scope/pkg`. */
+export function packageName(spec: string): string {
+  const at = spec.lastIndexOf("@")
+  return at > 0 ? spec.slice(0, at) : spec
+}
+
+/** The shell command that installs this policy's package. Shared with the template build. */
+export function installCommand(policy: ServerPolicy): string {
+  switch (policy.launcher) {
+    case "npx":
+      return `npm install -g ${JSON.stringify(policy.package)} --silent --no-fund --no-audit`
+    case "python":
+      return `pip3 install --break-system-packages --quiet ${JSON.stringify(policy.package)}`
+    case "uvx":
+      throw new Error(
+        'the uvx launcher is not implemented yet (uv is not in the base image). Use launcher = "npx" or "python".',
+      )
+  }
+}
+
+export async function installServerPackage(sandbox: Sandbox, policy: ServerPolicy, log: Logger): Promise<void> {
+  log(`installing ${policy.launcher === "npx" ? "npm" : "pip"} package ${policy.package}…`)
+  must(await sh(sandbox, installCommand(policy), 600_000), `installing ${policy.package}`)
+}
+
+/**
+ * Work out how to invoke the installed server.
+ *
+ * Split from installation so a pinned template — where the package is already
+ * baked in — can resolve the entrypoint in one round trip instead of paying to
+ * install it again.
+ */
+export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy): Promise<Entrypoint> {
   switch (policy.launcher) {
     case "npx": {
-      log(`installing npm package ${policy.package}…`)
-      must(
-        await sh(
-          sandbox,
-          `npm install -g ${JSON.stringify(policy.package)} --silent --no-fund --no-audit`,
-          600_000,
-        ),
-        `npm install -g ${policy.package}`,
-      )
-      // Resolve the entrypoint from the package's own bin field rather than
+      // Read the entrypoint out of the package's own bin field rather than
       // guessing a binary name from the package name.
       const probe = must(
         await sh(
           sandbox,
           [
-            `PKG_DIR="$(npm root -g)/${policy.package}"`,
+            `PKG_DIR="$(npm root -g)/${packageName(policy.package)}"`,
             'node -e \'const p=require(process.argv[1]+"/package.json");const b=p.bin;' +
               'if(!b){console.error("no bin field");process.exit(1)}' +
               'const rel=typeof b==="string"?b:Object.values(b)[0];' +
@@ -125,27 +153,28 @@ export async function installServer(sandbox: Sandbox, policy: ServerPolicy, log:
     }
 
     case "python": {
-      log(`installing pip package ${policy.package}…`)
-      must(
-        await sh(
-          sandbox,
-          `pip3 install --break-system-packages --quiet ${JSON.stringify(policy.package)}`,
-          600_000,
-        ),
-        `pip3 install ${policy.package}`,
-      )
       // `package` names the distribution; the importable module is the same
       // name with dashes normalised, which covers the common case.
-      const module = policy.package.replace(/-/g, "_")
+      const module = packageName(policy.package).replace(/-/g, "_")
       return { cmd: "python3", args: ["-m", module, ...policy.args] }
     }
 
     case "uvx":
       throw new Error(
-        "the uvx launcher is not implemented yet (uv is not in the base image). " +
-          "Use launcher = \"npx\" or \"python\" for now.",
+        'the uvx launcher is not implemented yet (uv is not in the base image). Use launcher = "npx" or "python".',
       )
   }
+}
+
+/** Read the version that actually landed, for the record in airlock.toml. */
+export async function installedVersion(sandbox: Sandbox, policy: ServerPolicy): Promise<string | undefined> {
+  const name = packageName(policy.package)
+  const out =
+    policy.launcher === "npx"
+      ? await sh(sandbox, `node -e 'console.log(require("${"$"}(npm root -g)/${name}/package.json").version)' 2>/dev/null || true`)
+      : await sh(sandbox, `pip3 show ${JSON.stringify(name)} 2>/dev/null | sed -n 's/^Version: //p' || true`)
+  const v = out.stdout.trim().split("\n").filter(Boolean).pop()
+  return v && /^\d/.test(v) ? v : undefined
 }
 
 /**
