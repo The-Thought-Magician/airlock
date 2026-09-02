@@ -17,6 +17,7 @@ import {
   buildNetworkJail,
   installJailDependencies,
   installServer,
+  installNodeProxyShim,
   installRelayWrapper,
   jailCommand,
   readProxyLog,
@@ -186,6 +187,14 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
     // per-frame decode (see WRAP_PATH). Cheap; installed on every launch.
     await installRelayWrapper(sandbox)
 
+    // Node's built-in fetch ignores HTTP_PROXY, so without this a node server
+    // using fetch would reach nothing through the jail. Only bother when there
+    // is actually a proxy to point it at (an egress allowlist).
+    let nodeProxyEnv: Record<string, string> = {}
+    if ((policy.launcher === "npx" || policy.launcher === "local") && policy.egress.length > 0) {
+      nodeProxyEnv = await installNodeProxyShim(sandbox, log)
+    }
+
     audit.write({
       kind: "session.start",
       at: new Date().toISOString(),
@@ -308,7 +317,7 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
     const proc = await sandbox.commands.start(jailed.cmd, {
       args: jailed.args,
       cwd: WORKDIR,
-      env: { ...policy.secrets, ...proxyEnv, HOME: "/home/mcp", PATH: "/usr/local/bin:/usr/bin:/bin" },
+      env: { ...policy.secrets, ...proxyEnv, ...nodeProxyEnv, HOME: "/home/mcp", PATH: "/usr/local/bin:/usr/bin:/bin" },
       onStdout: (data) => fromServer.push(data),
       // The server's stderr is its log, not protocol. Forward it so the client
       // can surface it, prefixed so it is distinguishable from Airlock's own.

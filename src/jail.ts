@@ -95,6 +95,46 @@ export async function installRelayWrapper(sandbox: Sandbox): Promise<void> {
   must(await sh(sandbox, `chown root:root ${WRAP_PATH} && chmod 555 ${WRAP_PATH}`), "installing the relay wrapper")
 }
 
+/**
+ * Node's built-in fetch (undici) ignores HTTP_PROXY, so a jailed node server
+ * that uses fetch would reach nothing — safe (no route, fails closed) but
+ * useless. This shim, loaded via NODE_OPTIONS=--require, points undici's global
+ * dispatcher at the proxy so fetch works like curl and python already do.
+ *
+ * Verified: undici v6/v7 throws "File is not defined" on the base image's Node
+ * 18, so v5 is pinned. The shim is silent on failure — if undici can't load,
+ * fetch stays direct and simply fails closed, which is the safe default.
+ */
+export const NODE_SHIM_PATH = "/opt/airlock-node-proxy.cjs"
+const NODE_SHIM_SOURCE = `// Airlock node proxy shim. Generated.
+try {
+  const { setGlobalDispatcher, ProxyAgent } = require("undici")
+  const p = process.env.HTTPS_PROXY || process.env.https_proxy
+  if (p) setGlobalDispatcher(new ProxyAgent(p))
+} catch (e) { /* undici unavailable: leave fetch direct (fails closed in the jail) */ }
+`
+
+/**
+ * Make node's global fetch proxy-aware. Installs undici v5 if absent, writes the
+ * shim, and returns the env that activates it. Only worth calling for node
+ * launchers with an egress allowlist — with no network there is nothing to
+ * proxy to. Idempotent.
+ */
+export async function installNodeProxyShim(sandbox: Sandbox, log: Logger): Promise<Record<string, string>> {
+  const present = await sh(sandbox, `[ -d "$(npm root -g)/undici" ] && echo yes || echo no`)
+  if (present.stdout.trim() !== "yes") {
+    log("installing undici (makes node's fetch honour the egress proxy)…")
+    must(
+      await sh(sandbox, "npm install -g undici@5 --silent --no-fund --no-audit", 300_000),
+      "installing undici for the node proxy shim",
+    )
+  }
+  await sandbox.files.write(NODE_SHIM_PATH, NODE_SHIM_SOURCE)
+  await sh(sandbox, `chown root:root ${NODE_SHIM_PATH} && chmod 555 ${NODE_SHIM_PATH}`)
+  const nodePath = (await sh(sandbox, "npm root -g")).stdout.trim()
+  return { NODE_OPTIONS: `--require ${NODE_SHIM_PATH}`, NODE_PATH: nodePath }
+}
+
 /** Where a launcher's entrypoint ended up, and how to invoke it. */
 export interface Entrypoint {
   cmd: string

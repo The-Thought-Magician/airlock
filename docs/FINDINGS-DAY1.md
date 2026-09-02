@@ -239,23 +239,34 @@ audit log.
 
 ---
 
-## Addendum (2026-09-02, later): egress relies on the client honouring HTTP_PROXY
+## Addendum (2026-09-02, later): Node's fetch ignores HTTP_PROXY — found, then fixed
 
 Found while building credential brokering. The jail forces traffic through the
 proxy by having no route to anything else, and injects `HTTP_PROXY` /
 `HTTPS_PROXY` so proxy-aware clients use it. But **Node's built-in `fetch`
-(undici) ignores those variables.** A server that uses global `fetch` therefore
-cannot reach anything at all — it fails closed with a connection error rather
-than leaking, so it is *safe*, but the allowlisted host does not work either.
+(undici) ignores those variables.** A server using global `fetch` reached
+nothing — safe (fails closed, no leak) but the allowlisted host didn't work
+either. `curl` and `python-requests` were unaffected.
 
-- `curl`, `python-requests`, and most language HTTP stacks honour the proxy
-  variables and work, brokering included (`npm run test:broker` passes 3/3
-  through curl).
-- Node `fetch` needs an explicit `ProxyAgent`; the server would have to opt in.
-- This is a usability limitation, not a security hole — the failure mode is "no
-  network" not "unfiltered network". It belongs in `docs/LIMITATIONS.md`, and a
-  future mitigation is to inject a `NODE_OPTIONS` shim that installs a global
-  undici dispatcher pointed at the proxy.
+**Now fixed**, after verifying the mechanism rather than assuming it. A probe
+(`npm run probe:nodeproxy`) established two things against the base image's Node
+18:
+
+1. A `--require` shim calling `undici`'s `setGlobalDispatcher(new ProxyAgent(…))`
+   *does* redirect global fetch — proven by the request appearing in the proxy's
+   own log, which it never does without the shim.
+2. undici **v6/v7 throws `File is not defined` on Node 18**; v5 is required. The
+   shim pins `undici@5`.
+
+So `airlock run` now, for node launchers with an egress allowlist, installs
+undici@5 and sets `NODE_OPTIONS=--require <shim>` on the server. End to end
+(`npm run test:nodefetch`): a server using only global `fetch` reaches the
+allowlisted host (`OK 200`) and is blocked from others. The shim is silent on
+failure, so if undici can't load, fetch simply stays direct and fails closed —
+the safe default is preserved.
+
+A bonus fell out of this: because the shim points at the same proxy, brokering
+now works for node servers too, not just curl/python ones.
 
 ## Reproducing
 
