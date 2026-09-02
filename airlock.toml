@@ -1,0 +1,32 @@
+# Airlock policy — one block per MCP server.
+#
+# Isolation is the default; access is the opt-in. An omitted or empty `egress`
+# means the server has no network at all: it runs in a namespace with no
+# interfaces, so there is no route to anywhere. An omitted `mounts` means it
+# sees none of your filesystem — not because a rule forbids it, but because
+# there is no mechanism by which your laptop's files could be there.
+
+# The MCP reference test server. No network, no files: the strictest possible
+# configuration, and it still works, which is the point.
+[server.everything]
+launcher = "npx"
+package  = "@modelcontextprotocol/server-everything"
+egress   = []
+mounts   = []
+
+# A server that legitimately needs one host and nothing else.
+[server.fetch]
+launcher = "npx"
+package  = "@modelcontextprotocol/server-everything"
+egress   = ["api.github.com"]
+mounts   = []
+
+# Filesystem server, scoped to a single directory that is synced in.
+# `mode = "rw"` syncs changes back out when the session ends; `ro` mounts are
+# owned by root inside the sandbox, so the server cannot rewrite them.
+# [server.filesystem]
+# launcher = "npx"
+# package  = "@modelcontextprotocol/server-filesystem"
+# args     = ["/mnt/airlock/home/you/projects/demo"]
+# egress   = []
+# mounts   = [{ path = "~/projects/demo", mode = "rw" }]

@@ -9,13 +9,22 @@
     "probe:egress": "tsx scripts/probe-egress.ts",
     "probe:netfilter": "tsx scripts/probe-netfilter.ts",
     "probe:netns": "tsx scripts/probe-netns.ts",
-    "relay:e2e": "tsx scripts/relay-e2e.ts"
+    "relay:e2e": "tsx scripts/relay-e2e.ts",
+    "airlock": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "e2e": "tsx scripts/e2e-airlock.ts"
   },
   "dependencies": {
-    "@solarisdk/sdk": "^0.1.2"
+    "@solarisdk/sdk": "^0.1.2",
+    "smol-toml": "^1.8.0"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "bin": {
+    "airlock": "./dist/cli.js"
   }
 }

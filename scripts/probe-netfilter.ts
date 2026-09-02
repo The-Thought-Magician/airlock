@@ -18,12 +18,9 @@
  */
 import { SolariClient } from "@solarisdk/sdk"
 import { mkdirSync, writeFileSync } from "node:fs"
+import { requireApiKey } from "../src/env.js"
 
-const apiKey = process.env.SOLARI_API_KEY
-if (!apiKey) {
-  console.error("SOLARI_API_KEY is not set. Run: set -a && . ./.env && set +a")
-  process.exit(1)
-}
+const apiKey = requireApiKey()
 
 const sections: Record<string, string> = {}
 
