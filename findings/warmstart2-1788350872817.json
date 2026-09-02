@@ -1,0 +1,86 @@
+{
+  "at": "2026-09-02T12:07:52.817Z",
+  "snapshotId": "snap_dl4tdx6n03ax",
+  "coldTotalMs": 12316.789698999999,
+  "provisionMs": 9316.869621,
+  "snapshotMs": 11025.302146999999,
+  "forkTimes": [
+    57648.227094000016,
+    24509.935847999994,
+    58273.09696599998
+  ],
+  "pauseResume": [
+    3397.5489450000023,
+    54543.979845999995
+  ],
+  "samples": [
+    {
+      "label": "cold create + connect",
+      "ms": 2999.9200779999996,
+      "ok": true
+    },
+    {
+      "label": "provision (apt + npm + jail)",
+      "ms": 9316.869621,
+      "ok": true
+    },
+    {
+      "label": "→ cold total",
+      "ms": 12316.789698999999,
+      "ok": true,
+      "detail": "apt=yes server=yes proxy=yes netns=yes"
+    },
+    {
+      "label": "snapshot()",
+      "ms": 11025.302146999999,
+      "ok": true,
+      "detail": "snap_dl4tdx6n03ax…"
+    },
+    {
+      "label": "pause() #1",
+      "ms": 11337.330519,
+      "ok": true
+    },
+    {
+      "label": "resume() #1",
+      "ms": 3397.5489450000023,
+      "ok": true,
+      "detail": "apt=yes server=yes proxy=yes netns=yes"
+    },
+    {
+      "label": "pause() #2",
+      "ms": 12099.805975000003,
+      "ok": true
+    },
+    {
+      "label": "resume() #2",
+      "ms": 54543.979845999995,
+      "ok": true,
+      "detail": "apt=yes server=yes proxy=yes netns=yes"
+    },
+    {
+      "label": "revert()",
+      "ms": null,
+      "ok": false,
+      "detail": "Not revertable"
+    },
+    {
+      "label": "create({ fromSnapshot }) #1",
+      "ms": 57648.227094000016,
+      "ok": true,
+      "detail": "apt=yes server=yes proxy=yes netns=yes"
+    },
+    {
+      "label": "create({ fromSnapshot }) #2",
+      "ms": 24509.935847999994,
+      "ok": true,
+      "detail": "apt=yes server=yes proxy=yes netns=yes"
+    },
+    {
+      "label": "create({ fromSnapshot }) #3",
+      "ms": 58273.09696599998,
+      "ok": true,
+      "detail": "apt=yes server=yes proxy=yes netns=yes"
+    }
+  ]
+}

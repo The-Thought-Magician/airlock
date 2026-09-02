@@ -13,7 +13,10 @@
     "airlock": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "e2e": "tsx scripts/e2e-airlock.ts"
+    "e2e": "tsx scripts/e2e-airlock.ts",
+    "probe:warmstart": "tsx scripts/probe-warmstart.ts",
+    "probe:warmstart2": "tsx scripts/probe-warmstart2.ts",
+    "probe:template": "tsx scripts/probe-template.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",

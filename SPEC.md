@@ -4,7 +4,7 @@
 
 **Built for:** Pinetree Research / Solari SWE intern challenge
 **Author:** Chiranjeet
-**Status:** Spec — not started
+**Status:** In progress — relay and jail working end to end; see `docs/FINDINGS-DAY1.md` and `docs/FINDINGS-WARMSTART.md`
 **Target scope:** One weekend
 
 ---
@@ -32,7 +32,11 @@ cleanly before writing a single line of Airlock.
 Checked against `docs.getsolari.com` before writing this spec. These are the
 ground truth the design rests on.
 
-### Snapshots — fully available, better than assumed
+### Snapshots — available, but measured and rejected
+
+> **Revised 2026-09-02.** The API surface below is accurate, but the
+> performance assumption underneath it was wrong, and `revert()` turns out to
+> be unavailable on this plan. See §4 and `docs/FINDINGS-WARMSTART.md`.
 
 | Operation | API |
 |-----------|-----|
@@ -41,9 +45,12 @@ ground truth the design rests on.
 | Boot a new independent machine from a save point | `create({ template, fromSnapshot })` |
 | Park without shutdown | `pause()` / `resume()` |
 
-Snapshots work identically for sandboxes and desktops. `fromSnapshot` is a
-create-time parameter, so forking is first-class. The version-pinning argument in
-§4 stands unmodified.
+Snapshots work identically for sandboxes and desktops, and `fromSnapshot` is a
+create-time parameter, so forking is first-class. Measured, though:
+`fromSnapshot` averages 46.8 s (3.8× slower than a cold create plus provision),
+`revert()` returns `409 Not revertable`, and `pause()/resume()` varies 3.4 s →
+54.5 s. The version-pinning argument in §4 survives; the speed argument does
+not, and §4 now uses custom templates instead.
 
 ### Sandbox create parameters (POST /sandboxes)
 
@@ -56,8 +63,10 @@ Relevant consequences:
 
 - `envs` gives per-session environment injection — this is how placeholder
   credentials reach the server without the real secret.
-- `lifecycle.onTimeout: "pause"` plus `autoResume` is a cheaper warm-start path
-  than holding a sandbox running.
+- `lifecycle.onTimeout: "pause"` plus `autoResume` looked like a cheaper
+  warm-start path than holding a sandbox running. Measured, `resume()` is too
+  variable to build on (3.4 s then 54.5 s on one machine), so Airlock kills
+  rather than parks.
 - `metadata` labels let Airlock find and reap its own orphaned sandboxes.
 
 ### Endpoints that matter
@@ -155,8 +164,8 @@ subprocess slot.
 
 1. Client launches `airlock run --server some-tool` instead of `npx some-mcp-server`.
 2. Airlock reads the policy for `some-tool` from `airlock.toml`.
-3. Airlock resumes a sandbox from the pinned snapshot for that server, or
-   provisions and snapshots it on first run.
+3. Airlock creates a sandbox from the pinned template for that server, or
+   provisions one cold if nothing has been built yet (§4).
 4. Airlock starts the real server inside the sandbox, wired to stdio there.
 5. Airlock relays JSON-RPC frames in both directions, applying policy in the middle.
 6. On client disconnect, Airlock kills the sandbox explicitly (`kill()`, not `close()`).
@@ -313,41 +322,54 @@ route; DNS resolution fails; `nsenter` to the host namespace denied.
 
 ---
 
-## 4. The snapshot mechanism
+## 4. The pinned-build mechanism
 
-This is the part that makes Solari load-bearing rather than decorative, and it
-solves two problems with one primitive.
+> **Revised 2026-09-02** after measuring every warm-start path. This section
+> was "The snapshot mechanism" and claimed restore was milliseconds. It is not:
+> `create({ fromSnapshot })` averages **46.8 s** against **12.3 s** for a cold
+> create plus full provision — 3.8× slower, with no warm-up across repeats.
+> `revert()` is unavailable on this plan (`409 Not revertable`) and
+> `pause()/resume()` varies 3.4 s → 54.5 s on the same machine. Full numbers in
+> `docs/FINDINGS-WARMSTART.md`.
+>
+> Snapshots are out. **Custom templates** deliver everything this section
+> actually wanted, at 11.4 s.
+
+The value here was never really speed — provisioning is only 9.3 s. It is that
+the build is *pinned*: immutable, reproducible, and shareable. A custom template
+gives all three and is the ordinary `create` path.
 
 ### 4.1 How it works
 
-1. First run for a given server: `create({ template: "base" })`, install the
-   server (`npx -y`, `uvx`, or `pip install`), install the egress proxy and
-   iptables rules from §3.2, let it reach a ready state.
-2. `snapshot("airlock-<server>-<version>")` → snapshot ID.
-3. Record the snapshot ID against the server's policy entry, alongside the
+1. `airlock build <server>` compiles an `Image` from `base`: apt-installs the
+   jail dependencies (`socat`, `tinyproxy`, `iproute2`, `procps`), creates the
+   unprivileged `mcp` user, and installs the server at a pinned version.
+2. `templates.build()` → a `tpl_…` id. One-off cost: **22.5 s**.
+3. Record the template id against the server's policy entry, alongside the
    resolved package version.
-4. Every subsequent launch is `create({ template: "base", fromSnapshot: snapId })`.
-5. `revert(snapId)` is also available if you want to reuse one long-lived sandbox
-   and reset it between sessions instead of forking a fresh one.
+4. Every subsequent launch is `create({ template: "tpl_…" })` — **11.4 s**, and
+   consistent (10.9 / 11.3 / 11.9 s).
+5. With no pinned template, `airlock run` provisions cold (**12.3 s**) so the
+   tool works before anything has been built.
 
 ### 4.2 What this buys
 
-| Problem | How the snapshot solves it |
-|---------|---------------------------|
-| Cold start latency | Resume is milliseconds; no reinstall, no npm fetch |
-| Supply-chain updates | Snapshot is immutable; a poisoned upstream release cannot reach you |
+| Problem | How a pinned template solves it |
+|---------|--------------------------------|
+| ~~Cold start latency~~ | **Retired.** It was never true of snapshots, and templates only match cold provisioning. Do not claim a speed win. |
+| Supply-chain updates | The template is immutable; a poisoned upstream release published after the build cannot reach you |
 | Reproducibility | The same bytes run every time, across machines |
-| Team distribution | Share the snapshot ID and the policy; teammates get the vetted build |
+| Team distribution | Commit the `tpl_…` id in the policy; teammates get the vetted build. A template is an org artifact, where a snapshot was one machine's save point |
 
-### 4.3 Re-snapshotting
+### 4.3 Rebuilding
 
 Updating a server is an explicit, auditable act:
 
 ```
-airlock update acme     # provision fresh, install latest, diff tool schemas, re-snapshot
+airlock build acme --update   # install latest, diff tool schemas, mint a new template
 ```
 
-The diff is shown before the new snapshot is adopted. Updates become a decision
+The diff is shown before the new template is adopted. Updates become a decision
 rather than an accident.
 
 ---
@@ -362,8 +384,8 @@ they do.
 | Prerequisite | Docker daemon, image builds, disk | An API key |
 | Locked-down corporate laptop | Often not permitted | Works |
 | Blast radius of an escape | Your machine | Someone else's cloud |
-| Cold start | Seconds, plus image pull | Milliseconds from snapshot |
-| Version pinning | Possible, manual, verbose | Free, it's the snapshot |
+| Cold start | Seconds, plus image pull | ~11 s from a pinned template, measured. **Docker wins this row** once its image is cached locally — say so |
+| Version pinning | Possible, manual, verbose | A committed `tpl_…` id |
 | Team-wide policy | Bespoke tooling | A committed config file |
 | Local resource cost | Your CPU and RAM | None |
 
@@ -405,14 +427,14 @@ package    = "@modelcontextprotocol/server-github"
 egress     = ["api.github.com"]
 mounts     = []
 secrets    = { GITHUB_TOKEN = "keyring:github-mcp" }
-snapshot   = "snap_..."          # written by airlock on first run
+template   = "tpl_..."           # written by `airlock build`
 
 [server.filesystem]
 launcher   = "npx"
 package    = "@modelcontextprotocol/server-filesystem"
 egress     = []                   # no network at all
 mounts     = [{ path = "~/projects/demo", mode = "rw" }]
-snapshot   = "snap_..."
+template   = "tpl_..."
 ```
 
 ---
@@ -430,7 +452,7 @@ a live API key to settle.
 | 4 | ~~Per-call round-trip latency?~~ | — | ⚠️ Partly: 256ms p50 for one-shot `exec`, 1426ms cold boot. The relay figure that actually decides usability is still unmeasured |
 | 5 | ~~Does `base` ship node and python?~~ | — | ✅ Resolved: node 18.20.4, python 3.11.2, plus npm/npx/pip3/git/curl. `uv`/`uvx` must be installed |
 | 6 | Free-tier concurrency cap? | One sandbox per server adds up | Multiplex servers into one sandbox, weaker isolation, documented |
-| 7 | Is `pause`+`autoResume` cheaper and faster than `fromSnapshot`? | Warm-start strategy | Measure both, pick one, explain the choice |
+| 7 | ~~Is `pause`+`autoResume` cheaper and faster than `fromSnapshot`?~~ | — | ✅ Resolved: neither. Both lose to a cold create. `revert()` is unavailable, `pause/resume` varies 16×. Custom templates win — see `docs/FINDINGS-WARMSTART.md` |
 | 8 | Does the stdio relay work over `WS /control/:id` cleanly? | Core mechanism | `exec` with streaming stdin/stdout as the alternative path |
 
 Question 3 is settled — see `docs/FINDINGS-DAY1.md`. Questions 6, 7 and 8 remain,
@@ -543,8 +565,8 @@ resolved first.
 4. Add selective file admission. Confirm `~/.ssh` reads return `ENOENT`, which it
    should already, since there is no host mount at all.
 5. Add the egress proxy plus iptables. Prove a blocked POST fails.
-6. Add the snapshot flow (`snapshot` / `fromSnapshot`). Measure and record startup
-   before and after, with real numbers.
+6. Add the pinned-build flow (`airlock build` → a custom template). Measured:
+   snapshots lose badly, templates win — see `docs/FINDINGS-WARMSTART.md`.
 7. Add the audit log.
 8. Write the evil server and record the demo.
 9. Add definition pinning if time remains.

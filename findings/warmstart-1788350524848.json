@@ -1,0 +1,51 @@
+{
+  "at": "2026-09-02T12:02:04.848Z",
+  "snapshotId": "snap_dl4tbo5kx48h",
+  "results": [
+    {
+      "path": "A. cold create + full provision",
+      "description": "what every launch costs with no snapshot at all",
+      "ms": 15326.21272,
+      "state": {
+        "aptDeps": true,
+        "serverInstalled": true,
+        "netnsExists": true,
+        "tinyproxyRunning": true,
+        "bridgeRunning": true,
+        "socketPresent": true,
+        "hasPgrep": false,
+        "proxyListening": true,
+        "raw": "apt=yes server=yes netns=yes tinyproxy=yes bridge=yes sock=yes has_pgrep=no proxy_listening=yes"
+      },
+      "note": "create 2.33s + apt 5.06s + npm 3.78s + jail 4.16s"
+    },
+    {
+      "path": "C. revert(snapshotId)",
+      "description": "rewind this machine to the save point",
+      "ms": null,
+      "note": "FAILED: Not revertable"
+    },
+    {
+      "path": "D. pause() + resume()",
+      "description": "park the machine and bring it back",
+      "ms": null,
+      "note": "FAILED: Not found"
+    },
+    {
+      "path": "B. create({ fromSnapshot })",
+      "description": "boot a fresh independent machine from the save point",
+      "ms": 59082.388962,
+      "state": {
+        "aptDeps": true,
+        "serverInstalled": true,
+        "netnsExists": true,
+        "tinyproxyRunning": true,
+        "bridgeRunning": true,
+        "socketPresent": true,
+        "hasPgrep": false,
+        "proxyListening": true,
+        "raw": "apt=yes server=yes netns=yes tinyproxy=yes bridge=yes sock=yes has_pgrep=no proxy_listening=yes"
+      }
+    }
+  ]
+}
