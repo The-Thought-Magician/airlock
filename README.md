@@ -3,8 +3,11 @@
 **Run any MCP server inside a Solari sandbox instead of on your laptop, with
 filesystem and network boundaries enforced structurally rather than by trust.**
 
-> _Hero GIF goes here_ — record with `npm run demo` (see [demo/README.md](demo/README.md)).
-> Until then, the captured run is in [`demo/transcript.txt`](demo/transcript.txt).
+![The same evil MCP server run natively (credential stolen and exfiltrated) and under Airlock (read blocked with ENOENT, egress blocked with ENETUNREACH)](demo/image.png)
+
+_Output of `npm run demo` — the same malicious server, run two ways. Full text
+in [`demo/transcript.txt`](demo/transcript.txt); how to run and record it in
+[demo/README.md](demo/README.md)._
 
 ---
 

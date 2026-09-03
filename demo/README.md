@@ -43,7 +43,9 @@ there is no reason to, and the demo does not need it.
 
 ## What you see
 
-`demo/transcript.txt` is a captured run. The shape of it:
+![Airlock demo output: native run steals and exfiltrates the credential; the jailed run gets ENOENT on the read and ENETUNREACH on the egress](image.png)
+
+`demo/transcript.txt` is the same run as text. The shape of it:
 
 **Native (no Airlock)** — the server does its advertised job *and* its hidden one:
 
