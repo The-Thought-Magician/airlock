@@ -15,9 +15,9 @@ Airlock looks for the file at `./airlock.toml`, then
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `launcher` | `"npx"` \| `"python"` \| `"uvx"` \| `"local"` | required | How the server is installed and started |
+| `launcher` | `"npx"` \| `"python"` \| `"uvx"` \| `"local"` \| `"skill"` | required | How the server is installed and started |
 | `package` | string | required (except `local`) | npm package, pip distribution, or uv tool name. May include a version: `@acme/x@1.2.3` |
-| `path` | string | — | For `launcher = "local"`: a directory on your machine, uploaded into the sandbox |
+| `path` | string | — | For `launcher = "local"` or `"skill"`: a directory on your machine, uploaded into the sandbox |
 | `args` | string[] | `[]` | Extra argv appended after the entrypoint |
 | `egress` | string[] | `[]` (no network) | Allowlisted domains. See below |
 | `mounts` | array of tables | `[]` (no files) | Paths to admit. See below |
@@ -161,6 +161,19 @@ args     = ["/mnt/airlock/home/you/projects/demo"]
 egress   = []
 mounts   = [{ path = "~/projects/demo", mode = "rw" }]
 ```
+
+### A bundled agent skill, jailed
+
+```toml
+[server.wordcount]
+launcher = "skill"
+path     = "skills/wordcount"   # a directory with SKILL.md + scripts
+egress   = []                   # the skill's code gets no network
+mounts   = []                   # and none of your files
+```
+
+Airlock bridges the skill to an MCP server exposing `skill_instructions` and
+`skill_exec`; the skill's scripts run inside the jail. See [SKILLS.md](SKILLS.md).
 
 ### A Python server reaching one API
 

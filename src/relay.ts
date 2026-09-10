@@ -191,7 +191,8 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
     // using fetch would reach nothing through the jail. Only bother when there
     // is actually a proxy to point it at (an egress allowlist).
     let nodeProxyEnv: Record<string, string> = {}
-    if ((policy.launcher === "npx" || policy.launcher === "local") && policy.egress.length > 0) {
+    const nodeLauncher = policy.launcher === "npx" || policy.launcher === "local" || policy.launcher === "skill"
+    if (nodeLauncher && policy.egress.length > 0) {
       nodeProxyEnv = await installNodeProxyShim(sandbox, log)
     }
 

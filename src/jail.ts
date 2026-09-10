@@ -22,6 +22,8 @@
 import type { Sandbox } from "@solarisdk/core"
 import { domainToEre, type ServerPolicy } from "./config.js"
 import { startBrokerProxy } from "./broker.js"
+import { uploadSkill, SKILL_BRIDGE } from "./skill.js"
+import { scanText } from "./inject-scan.js"
 
 export const MCP_UID = 4000
 export const MCP_GID = 4000
@@ -198,7 +200,18 @@ export async function installJailDependencies(sandbox: Sandbox, log: Logger): Pr
  * Returns how to invoke the installed entrypoint.
  */
 export async function installServer(sandbox: Sandbox, policy: ServerPolicy, log: Logger): Promise<Entrypoint> {
-  if (policy.launcher === "local") {
+  if (policy.launcher === "skill") {
+    if (!policy.path) throw new Error(`[server.${policy.name}] launcher = "skill" requires a path`)
+    const meta = await uploadSkill(sandbox, policy.path, log)
+    // Scan the SKILL.md the same way §3.5 scans tool descriptions — a skill's
+    // instructions are read by the agent, so a poisoned SKILL.md is exactly the
+    // tool-poisoning case.
+    const findings = scanText(meta.raw)
+    if (findings.length > 0) {
+      log(`WARNING: SKILL.md for "${meta.name}" contains ${findings.length} prompt-injection pattern(s):`)
+      for (const f of findings) log(`  ⚠ ${f.pattern}: ${JSON.stringify(f.excerpt)}`)
+    }
+  } else if (policy.launcher === "local") {
     await uploadLocalServer(sandbox, policy, log)
   } else {
     await installServerPackage(sandbox, policy, log)
@@ -254,8 +267,9 @@ export function packageName(spec: string): string {
 export function installCommand(policy: ServerPolicy): string {
   switch (policy.launcher) {
     case "local":
-      // Nothing to install: the source is uploaded at launch, not baked in.
-      // A local server changes every time you edit it, so pinning it into an
+    case "skill":
+      // Nothing to install: the source (or skill) is uploaded at launch, not
+      // baked in. It changes every time you edit it, so pinning it into an
       // immutable template would defeat the point of developing against it.
       return "true"
     case "npx":
@@ -329,6 +343,10 @@ export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy):
       return { cmd: "node", args: [`${LOCAL_SERVER_DIR}/${main}`, ...policy.args] }
     }
 
+    case "skill":
+      // The generated bridge (uploaded by installServer) is the entrypoint.
+      return { cmd: "node", args: [SKILL_BRIDGE, ...policy.args] }
+
     case "uvx": {
       // Ask uv what executable it actually installed rather than guessing from
       // the package name; `uv tool list` prints the tool and its entry points:
@@ -351,7 +369,7 @@ export async function resolveEntrypoint(sandbox: Sandbox, policy: ServerPolicy):
 
 /** Read the version that actually landed, for the record in airlock.toml. */
 export async function installedVersion(sandbox: Sandbox, policy: ServerPolicy): Promise<string | undefined> {
-  if (policy.launcher === "local") return undefined
+  if (policy.launcher === "local" || policy.launcher === "skill") return undefined
   const name = packageName(policy.package)
   let out
   if (policy.launcher === "npx") {

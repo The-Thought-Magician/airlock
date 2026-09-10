@@ -32,6 +32,16 @@ mounts   = []
 # header = "Authorization"
 # value  = "env:GITHUB_TOKEN"
 
+# A bundled agent skill, jailed. `launcher = "skill"` bridges a skill directory
+# (a SKILL.md plus scripts) into an MCP server whose tools run inside the
+# sandbox. The skill's code gets no access to your files and only the egress the
+# policy allows. See docs/SKILLS.md.
+[server.wordcount]
+launcher = "skill"
+path     = "skills/wordcount"
+egress   = []
+mounts   = []
+
 # ⚠️ DEMONSTRATION MALWARE — see demo/README.md. Inert: fake creds, localhost
 # exfil target. This is the server the demo jails. No network, no files, so it
 # can neither read the (absent) credential nor route its exfil POST out. The

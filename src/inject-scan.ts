@@ -60,6 +60,28 @@ function schemaDescriptions(schema: unknown, path = "inputSchema"): { field: str
   return out
 }
 
+/**
+ * Scan a raw block of text (e.g. a SKILL.md) for the same patterns. Used by the
+ * `skill` launcher, whose instructions are read by the agent just like a tool
+ * description.
+ */
+export function scanText(text: string, field = "text"): InjectionFinding[] {
+  const findings: InjectionFinding[] = []
+  for (const rule of RULES) {
+    const m = rule.re.exec(text)
+    if (m) {
+      const at = Math.max(0, m.index - 15)
+      findings.push({
+        tool: field,
+        field,
+        pattern: rule.label,
+        excerpt: (at > 0 ? "…" : "") + text.slice(at, m.index + m[0].length + 15).replace(/\s+/g, " ").trim() + "…",
+      })
+    }
+  }
+  return findings
+}
+
 export function scanTool(tool: ToolDefinition): InjectionFinding[] {
   const fields: { field: string; text: string }[] = [
     { field: "name", text: tool.name ?? "" },

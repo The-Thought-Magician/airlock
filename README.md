@@ -161,6 +161,7 @@ Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and
 | Doc | What's in it |
 |---|---|
 | [COMPARISON](docs/COMPARISON.md) | The security eval scorecard, benchmarks, and how Airlock compares to ToolHive / Docker MCP Gateway / nono |
+| [SKILLS](docs/SKILLS.md) | Jailing agent skills (a SKILL.md + scripts) as sandboxed MCP tools |
 | [QUICKSTART](docs/QUICKSTART.md) | Zero to a jailed server in five minutes |
 | [THREAT-MODEL](docs/THREAT-MODEL.md) | What Airlock defends against, what it doesn't, residual risk |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | The relay, the jail, lifecycle, the mechanisms that were measured |
