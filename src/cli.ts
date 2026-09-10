@@ -15,12 +15,17 @@ import { runRelay } from "./relay.js"
 import { buildTemplate, readToolsFromTemplate } from "./template.js"
 import { diffTools, renderToolDiff } from "./tools-hash.js"
 import { setServerKeys } from "./toml-edit.js"
+import { execInSession } from "./exec.js"
+import { installSkill } from "./skill-install.js"
 import { scanTools, renderInjectionFindings } from "./inject-scan.js"
 
 const USAGE = `airlock — run MCP servers inside a Solari sandbox
 
 usage:
   airlock run <server> [--config <path>]   relay a server (what your MCP client invokes)
+  airlock exec <server> [--fresh] -- <cmd> run one command for a skill/local server in the jail
+  airlock skill install <path> [--client claude] [--force]
+                                           install a skill natively, routed through the jail
   airlock build <server> [--update]        mint a pinned template and record it in the policy
   airlock init [--config <path>]           generate policy stubs from an existing MCP config
   airlock log [--server <name>] [--blocked] [--limit <n>]
@@ -30,7 +35,7 @@ usage:
   airlock templates [--prune]              list pinned/unused templates, delete the unused
 
 env:
-  SOLARI_API_KEY   required by \`run\` and \`build\`
+  SOLARI_API_KEY   required by \`run\`, \`build\`, and \`exec\`
   AIRLOCK_LOG      audit log path (default ${defaultLogPath()})
 `
 
@@ -77,6 +82,81 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   const audit = new AuditLog(process.env.AIRLOCK_LOG ?? defaultLogPath())
   return runRelay({ policy, apiKey, audit })
+}
+
+/**
+ * `airlock exec <server> [--fresh] -- <command>` — run one command for a
+ * skill/local server inside the jail, reusing a warm sandbox. This is the
+ * execution path a natively-installed skill routes through (see SKILLS.md).
+ */
+async function cmdExec(argv: string[]): Promise<number> {
+  const name = argv[0]
+  if (!name || name.startsWith("--")) {
+    process.stderr.write("airlock exec: a server name is required\n")
+    return 2
+  }
+  const sep = argv.indexOf("--")
+  if (sep === -1 || sep === argv.length - 1) {
+    process.stderr.write("airlock exec: expected `airlock exec <server> [--fresh] -- <command>`\n")
+    return 2
+  }
+  const command = argv.slice(sep + 1).join(" ")
+  const optsBefore = argv.slice(1, sep)
+  const apiKey = process.env.SOLARI_API_KEY
+  if (!apiKey) {
+    process.stderr.write("airlock: SOLARI_API_KEY is not set\n")
+    return 2
+  }
+  const config = loadConfig(flag(argv, "config"))
+  const policy = config.servers[name]
+  if (!policy) {
+    process.stderr.write(`airlock: no [server.${name}] in ${config.path}\n`)
+    return 2
+  }
+  if (policy.launcher !== "skill" && policy.launcher !== "local") {
+    process.stderr.write(`airlock exec: only skill/local servers support exec (${name} is ${policy.launcher})\n`)
+    return 2
+  }
+  // Diagnostics to stderr; the command's own output goes to stdout.
+  const result = await execInSession(
+    policy,
+    apiKey,
+    command,
+    (msg) => process.stderr.write(`airlock: ${msg}\n`),
+    optsBefore.includes("--fresh"),
+  )
+  process.stdout.write(result.stdout)
+  if (result.stderr) process.stderr.write(result.stderr)
+  return result.exitCode
+}
+
+/**
+ * `airlock skill install <path> [--client claude] [--force]` — install a skill
+ * natively so the client discovers it, with its commands routed through the jail.
+ */
+async function cmdSkillInstall(argv: string[]): Promise<number> {
+  const skillPath = argv[0]
+  if (!skillPath || skillPath.startsWith("--")) {
+    process.stderr.write("airlock skill install: a skill directory path is required\n")
+    return 2
+  }
+  const client = flag(argv, "client") ?? "claude"
+  try {
+    const { name, dest } = installSkill(resolve(skillPath), client, has(argv, "force"))
+    process.stdout.write(
+      `installed skill "${name}" → ${dest}\n\n` +
+        `Your ${client} client will discover it natively. Its SKILL.md routes commands\n` +
+        `through \`airlock exec ${name} -- <cmd>\`, so the skill's code runs in the sandbox.\n\n` +
+        `Add a policy block so \`airlock exec\` knows how to jail it:\n\n` +
+        `  [server.${name}]\n  launcher = "skill"\n  path     = ${JSON.stringify(skillPath)}\n  egress   = []\n  mounts   = []\n\n` +
+        `Note: this jailing is cooperative — the agent follows the SKILL.md. For an\n` +
+        `untrusted skill, prefer the structural bridge: \`airlock run ${name}\`. See docs/SKILLS.md.\n`,
+    )
+    return 0
+  } catch (err) {
+    process.stderr.write(`airlock skill install: ${err instanceof Error ? err.message : String(err)}\n`)
+    return 1
+  }
 }
 
 /**
@@ -451,6 +531,12 @@ async function main(): Promise<number> {
   switch (command) {
     case "run":
       return cmdRun(rest)
+    case "exec":
+      return cmdExec(rest)
+    case "skill":
+      if (rest[0] === "install") return cmdSkillInstall(rest.slice(1))
+      process.stderr.write(`airlock skill: unknown subcommand ${JSON.stringify(rest[0])} (known: install)\n`)
+      return 2
     case "build":
       return cmdBuild(rest)
     case "ps":
