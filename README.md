@@ -43,6 +43,11 @@ sandbox has no path to your laptop's filesystem at all.
                                                         └────────────────────┘
 ```
 
+**Security eval: 9/9 attack vectors contained** — filesystem theft, raw-socket
+egress, DNS exfiltration, netns escape, and rug pulls all blocked, verified live
+by `npm run eval`. Full scorecard and an honest comparison against ToolHive,
+Docker MCP Gateway, and nono in [docs/COMPARISON.md](docs/COMPARISON.md).
+
 The only thing you change is the command in your MCP config.
 
 **Before:**
@@ -155,6 +160,7 @@ Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and
 
 | Doc | What's in it |
 |---|---|
+| [COMPARISON](docs/COMPARISON.md) | The security eval scorecard, benchmarks, and how Airlock compares to ToolHive / Docker MCP Gateway / nono |
 | [QUICKSTART](docs/QUICKSTART.md) | Zero to a jailed server in five minutes |
 | [THREAT-MODEL](docs/THREAT-MODEL.md) | What Airlock defends against, what it doesn't, residual risk |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | The relay, the jail, lifecycle, the mechanisms that were measured |

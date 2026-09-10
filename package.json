@@ -25,7 +25,8 @@
     "test:broker": "tsx scripts/test-broker.ts",
     "test:inject": "tsx scripts/test-inject-scan.ts",
     "probe:nodeproxy": "tsx scripts/probe-nodeproxy.ts",
-    "test:nodefetch": "tsx scripts/test-nodefetch.ts"
+    "test:nodefetch": "tsx scripts/test-nodefetch.ts",
+    "eval": "tsx scripts/eval.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",
