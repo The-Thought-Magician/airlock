@@ -142,16 +142,21 @@ async function cmdSkillInstall(argv: string[]): Promise<number> {
   }
   const client = flag(argv, "client") ?? "claude"
   try {
-    const { name, dest } = installSkill(resolve(skillPath), client, has(argv, "force"))
+    const { name, dest, injectionFindings } = installSkill(resolve(skillPath), client, has(argv, "force"))
     process.stdout.write(
-      `installed skill "${name}" → ${dest}\n\n` +
+      `installed skill "${name}" → ${dest}\n` +
+        `(only SKILL.md was written; the skill's scripts stay off your machine)\n\n` +
         `Your ${client} client will discover it natively. Its SKILL.md routes commands\n` +
-        `through \`airlock exec ${name} -- <cmd>\`, so the skill's code runs in the sandbox.\n\n` +
+        `through \`airlock exec ${name} -- <cmd>\`, so the code runs only in the sandbox.\n\n` +
         `Add a policy block so \`airlock exec\` knows how to jail it:\n\n` +
-        `  [server.${name}]\n  launcher = "skill"\n  path     = ${JSON.stringify(skillPath)}\n  egress   = []\n  mounts   = []\n\n` +
-        `Note: this jailing is cooperative — the agent follows the SKILL.md. For an\n` +
-        `untrusted skill, prefer the structural bridge: \`airlock run ${name}\`. See docs/SKILLS.md.\n`,
+        `  [server.${name}]\n  launcher = "skill"\n  path     = ${JSON.stringify(skillPath)}\n  egress   = []\n  mounts   = []\n`,
     )
+    if (injectionFindings > 0) {
+      process.stdout.write(
+        `\n⚠ the SKILL.md contains ${injectionFindings} prompt-injection pattern(s). The code is\n` +
+          `  jailed, but the instructions are read by the agent — review them. See docs/SKILLS.md.\n`,
+      )
+    }
     return 0
   } catch (err) {
     process.stderr.write(`airlock skill install: ${err instanceof Error ? err.message : String(err)}\n`)

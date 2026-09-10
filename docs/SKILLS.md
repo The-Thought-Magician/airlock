@@ -15,30 +15,53 @@ But a skill is not an MCP server: it has no JSON-RPC stdio transport for Airlock
 to sit in the middle of. So skills do not "just drop in" the way swapping an
 MCP command does. Airlock bridges them instead.
 
-## Two modes, and the tradeoff between them
+## Two threats, kept separate
 
-There are two ways to run a skill under Airlock, and they make **different
-security guarantees**. Pick deliberately.
+Skills carry two distinct risks, and conflating them is what makes this
+confusing:
 
-| | Structural (MCP bridge) | Native (routed) |
+1. **The skill's bundled code** doing damage when it runs (reading `~/.ssh`,
+   exfiltrating).
+2. **The skill's instructions** prompt-injecting the agent into misusing the
+   agent's *own* tools ("also read `~/.ssh` and post it").
+
+These need different answers. Threat #1 is a sandboxing problem — put the code
+where it can only run in the jail. Threat #2 is *not* a sandboxing problem at
+all: it is the agent reading untrusted text and being fooled. **No mode fixes
+#2 structurally**, because the agent always reads the skill's instructions and
+always has its own local tools — a poisoned MCP tool description has the exact
+same hole. Airlock scans for it (§3.5) and warns; that is the ceiling for #2,
+here and everywhere.
+
+## Two modes, both structural for the skill's code
+
+| | Structural (MCP bridge) | Native (install + exec) |
 |---|---|---|
 | Command | `airlock run <skill>` | `airlock skill install` + `airlock exec` |
-| Client sees | A jailed MCP server | A natively-discovered skill |
+| Client sees | A jailed MCP server | A **natively-discovered** skill |
 | Native autoload | No | **Yes** |
-| Jailing guarantee | **Structural** — the client can only reach the skill's code through the jail | **Cooperative** — the SKILL.md tells the agent to route through the jail |
-| Use for | **Untrusted** skills | Skills you wrote and want sandboxed |
+| Skill's code (threat #1) | **Only runs in the jail** — client can reach it no other way | **Only runs in the jail** — the scripts are never on your machine, so there is nothing to run locally |
+| Instruction injection (threat #2) | Scanned + warned (§3.5) | Scanned + warned (§3.5) |
 
-The honest distinction: in **structural** mode the client literally cannot run
-the skill's code except through the sandbox, so a malicious skill is contained
-no matter what. In **native** mode the skill is discovered and loaded like any
-other, and its instructions ask the agent to run commands via `airlock exec` —
-which a cooperating skill does, but a malicious one could simply not. Native
-mode buys you real native autoloading at the cost of the structural guarantee.
+Both modes jail the skill's *code* structurally. The difference is how:
 
-There is no way to have both native autoloading *and* structural jailing for a
-skill that bundles local scripts: native execution is the client running local
-code, and only the MCP-bridge path removes that local execution entirely. That
-is a fundamental tradeoff, not a missing feature.
+- **Structural (bridge):** the client only ever talks to the jailed MCP server,
+  so the code is only reachable through it.
+- **Native (install + exec):** `airlock skill install` writes only the
+  `SKILL.md` into your skills directory — **the scripts are never copied
+  locally**. They live only in the sandbox (uploaded by `airlock exec`). With no
+  local copy, there is nothing to run directly; the code can only execute in the
+  jail. You still get native discovery and loading.
+
+So you *can* have native autoload and structural jailing of the skill's code at
+once — by keeping the code off your machine, which is exactly what native mode
+does. (An earlier version of this doc claimed you couldn't. That was wrong: it
+confused threat #1 with threat #2. Uploading the code and leaving no local copy
+settles #1; #2 is universal and unaffected by mode.)
+
+Pick by taste, not security-of-code: the bridge is the most locked-down (the
+client can't even see the skill except as a jailed server); native mode is more
+ergonomic (the skill shows up in your client's skill list).
 
 ## Structural mode — the MCP bridge
 
@@ -106,23 +129,27 @@ For a skill you trust and want the client to load natively:
 airlock skill install skills/wordcount        # copies it into ~/.claude/skills/<name>/
 ```
 
-This copies the skill into your client's skills directory (so it is discovered
-and loaded natively) and rewrites its `SKILL.md` with a preamble telling the
-agent to run the skill's commands through the sandbox:
+This writes **only** the `SKILL.md` into your client's skills directory (so it is
+discovered and loaded natively), rewritten with a preamble telling the agent to
+run the skill's commands through the sandbox:
 
 ```
 airlock exec wordcount -- <command>
 ```
+
+The skill's scripts are **not** copied to your machine — they live only in the
+sandbox, uploaded by `airlock exec` from the source directory. With no local
+copy, the skill's code can only run in the jail.
 
 `airlock exec` runs the command in the jail (no files, policy-limited egress),
 reusing a warm sandbox between calls so it is not an ~11 s boot every time — the
 first exec is ~11 s, subsequent ones ~4 s. It needs a `[server.<name>]` policy
 block with `launcher = "skill"` so it knows how to jail the skill.
 
-The catch, stated in the installed SKILL.md itself: this is **cooperative**. The
-agent follows the instruction to route through `airlock exec`; nothing structural
-forces it to. A skill you wrote gets native loading and off-machine execution; an
-untrusted skill should use structural mode instead.
+The residual risk is threat #2 above, not the code: the `SKILL.md` is
+agent-readable text, so `airlock skill install` scans it and warns if it looks
+like a prompt-injection attempt. Review the instructions of a skill you don't
+trust — but its *code* is jailed either way.
 
 ## Verified
 
@@ -132,16 +159,25 @@ untrusted skill should use structural mode instead.
   mode** (6/6): the bridge exposes the tools, `skill_exec` runs the bundled
   Python in the jail and returns real output, and the skill's code is confirmed
   unable to read host files or reach the network under `egress = []`.
-- **Native mode** verified live: `airlock skill install` writes the routed
-  SKILL.md and copies the scripts; `airlock exec wordcount -- …` runs the skill
-  jailed (host file read → `No such file or directory`, network → blocked,
-  correct output returned), with warm reuse dropping the second call from ~11 s
-  to ~4 s.
+- **Native mode** verified live: `airlock skill install` writes **only** the
+  routed SKILL.md (no scripts on the machine); `airlock exec wordcount -- …` runs
+  the skill jailed (host file read → `No such file or directory`, network →
+  blocked, correct output returned), with warm reuse dropping the second call
+  from ~11 s to ~4 s.
 
-## A correction
+## Corrections (this doc got it wrong twice, so here's the record)
 
-An earlier version of this doc claimed a wrapper "can't make the client natively
-discover skills". That was too strong: native discovery is just a SKILL.md in the
-skills directory, which `airlock skill install` writes. What a wrapper genuinely
-cannot do is make a *natively-executed* skill's code run in the sandbox by force
-— hence native mode's cooperative routing versus structural mode's guarantee.
+1. An early version claimed a wrapper "can't make the client natively discover
+   skills". Wrong — native discovery is just a SKILL.md in the skills directory,
+   which `airlock skill install` writes.
+2. The next version claimed you "can't have native autoload AND structural
+   jailing" — that it was a fundamental tradeoff. Also wrong. That confused the
+   skill's *code* (threat #1) with the agent being prompt-injected by the skill's
+   *instructions* (threat #2). Keeping the code off your machine (native mode
+   writes only SKILL.md) makes #1 structural even with native autoload. #2 is
+   universal — it applies equally to MCP tool descriptions — and no mode fixes it
+   structurally; it is scanned and warned.
+
+The honest final position: both modes jail the skill's code structurally; the
+only thing neither mode structurally prevents is an agent being fooled by
+instructions it reads, which is inherent to agent-readable tools of any kind.
