@@ -29,7 +29,8 @@
     "eval": "tsx scripts/eval.ts",
     "test:skill-parse": "tsx scripts/test-skill-parse.ts",
     "test:skill": "tsx scripts/test-skill.ts",
-    "prepare": "tsc -p tsconfig.build.json"
+    "prepare": "tsc -p tsconfig.build.json",
+    "test:toolacl": "tsx scripts/test-toolacl.ts"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",

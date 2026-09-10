@@ -74,6 +74,22 @@ export interface ServerPolicy {
    * real escalation over the plain allowlist and is documented as such.
    */
   broker: BrokerRule[]
+  /**
+   * Per-tool permissions (like ToolHive's fine-grained tool access). If
+   * `allowTools` is non-empty, ONLY those tools are exposed and callable;
+   * everything else is hidden from `tools/list` and rejected on `tools/call`.
+   * `denyTools` removes specific tools. Both empty means all tools pass.
+   * Enforcement is in the relay, structurally — a client cannot call a tool it
+   * was not shown, even if it guesses the name.
+   */
+  allowTools: string[]
+  denyTools: string[]
+  /** Sandbox resource limits (Solari create params). Undefined = platform default. */
+  cpu?: number
+  memMb?: number
+  diskGb?: number
+  /** Rolling idle timeout before the sandbox is reaped. Undefined = Airlock default. */
+  idleMs?: number
 }
 
 export interface BrokerRule {
@@ -117,6 +133,25 @@ export function domainToEre(domain: string): string {
     return `^(.*\\.)?${rest}$`
   }
   return `^${d.replace(/\./g, "\\.")}$`
+}
+
+/** Parse an optional numeric resource field, validating its range. */
+function parseResource(v: unknown, field: string, server: string, min: number, max: number): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v)) {
+    throw new ConfigError(`[server.${server}] ${field} must be an integer`)
+  }
+  if (v < min || v > max) {
+    throw new ConfigError(`[server.${server}] ${field} must be between ${min} and ${max} (got ${v})`)
+  }
+  return v
+}
+
+/** Whether a tool name is permitted by this policy's allow/deny lists. */
+export function isToolAllowed(policy: { allowTools: string[]; denyTools: string[] }, tool: string): boolean {
+  if (policy.denyTools.includes(tool)) return false
+  if (policy.allowTools.length > 0) return policy.allowTools.includes(tool)
+  return true
 }
 
 function asStringArray(v: unknown, field: string, server: string): string[] {
@@ -249,6 +284,8 @@ export function parseConfig(text: string, path: string): AirlockConfig {
     for (const d of egress) domainToEre(d)
 
     const broker = parseBroker(value.broker, name, egress)
+    const allowTools = asStringArray(value.allow_tools, "allow_tools", name)
+    const denyTools = asStringArray(value.deny_tools, "deny_tools", name)
 
     servers[name] = {
       name,
@@ -263,6 +300,12 @@ export function parseConfig(text: string, path: string): AirlockConfig {
       version: typeof value.version === "string" && value.version.length > 0 ? value.version : undefined,
       toolsHash: typeof value.tools_hash === "string" && value.tools_hash.length > 0 ? value.tools_hash : undefined,
       broker,
+      allowTools,
+      denyTools,
+      cpu: parseResource(value.cpu, "cpu", name, 1, 16),
+      memMb: parseResource(value.mem_mb, "mem_mb", name, 128, 65536),
+      diskGb: parseResource(value.disk_gb, "disk_gb", name, 1, 100),
+      idleMs: parseResource(value.idle_ms, "idle_ms", name, 30_000, 3_600_000),
     }
 
     // The field was renamed when snapshots were measured and dropped. Say so

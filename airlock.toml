@@ -22,6 +22,12 @@ launcher = "npx"
 package  = "@modelcontextprotocol/server-everything"
 egress   = ["api.github.com"]
 mounts   = []
+# Per-tool permissions (like ToolHive): expose only a read-only subset.
+# allow_tools = ["get_issue", "list_issues"]
+# Resource limits (like e2b/Daytona): cap the sandbox.
+# cpu = 2
+# mem_mb = 2048
+# idle_ms = 300000
 
 # Credential brokering (§3.3): the server never receives GITHUB_TOKEN. The proxy
 # terminates TLS to api.github.com and injects the Authorization header itself,

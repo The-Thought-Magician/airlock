@@ -78,13 +78,40 @@ e2b or Solari.
 | Blast radius of escape | **A disposable VM** | Your machine | Your machine | Your machine |
 | Filesystem isolation | **Absent by construction** (no host mount exists) | Container mounts you configure | Container mounts | Landlock path rules you configure |
 | Egress control | Allowlist, structural (no route) | Container network policy | Container network policy | Network rules |
-| Credential brokering | Yes (proxy injects, server never holds it) | No local creds attached | — | Credential paths blocked |
+| Credential brokering | Yes (proxy injects, server never holds it) | No local creds attached | — | Phantom credential + proxy |
+| Per-tool permissions | **Yes** (`allow_tools`/`deny_tools`) | Yes | — | argv policy |
 | Rug-pull detection | Yes (tool-definition pin) | — | — | — |
+| Resource limits | Yes (`cpu`/`mem_mb`/`disk_gb`/`idle_ms`) | Container limits | Container limits | — |
+| Runtime metrics | `airlock metrics` | OpenTelemetry | — | — |
+| Reviewable policy file | `airlock.toml` | Yes | Yes | JSON profile |
+| Skills | Jailed (structural or native) | — | — | Tool re-sandboxing |
 | Drop-in (one-line config swap) | Yes | Yes | Yes | Wraps the agent/CLI |
 | **Cost** | **Per sandbox-hour** | Free | Free (Docker) | Free |
 | **Offline** | **No** | Yes | Yes | Yes |
 | Per-call latency | ~300 ms (one RTT) | Near-zero (local) | Near-zero | Near-zero |
 | Maturity | Weekend prototype | v0.46, shipping | Shipping (Docker) | Shipping product |
+
+## What Airlock deliberately does NOT do
+
+Some of what e2b, Daytona, Modal, and Vercel Sandbox offer is intentionally out
+of scope, because Airlock is a security *layer*, not a sandbox vendor — it runs
+on Solari, which is a peer of those platforms. Adding these would make Airlock a
+worse copy of the thing underneath it:
+
+- **Persistent workspaces, stop/archive lifecycle** (Daytona) — sessions are
+  ephemeral by design; the sandbox dies with the client.
+- **Code-interpreter kernels, GPUs, multi-language SDKs** (e2b, Modal) — that is
+  the execution substrate's job. Airlock jails MCP servers; it does not run your
+  notebooks.
+- **Browser automation / desktops** — Solari offers these directly; Airlock
+  neither wraps nor competes with them.
+- **A server registry, OIDC/enterprise identity, signed action receipts**
+  (ToolHive's enterprise surface) — reasonable future work, but not the core
+  thesis and not a weekend's honest scope.
+
+The features above (per-tool permissions, resource limits, metrics, brokering)
+were added because they *are* the security-layer's job and competitors have
+them. The list here was left out on purpose, not for lack of time.
 
 ## Where Airlock genuinely differs
 

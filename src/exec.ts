@@ -100,8 +100,11 @@ export async function execInSession(
     log("booting a jailed session (first exec; subsequent ones reuse it)…")
     sandbox = await solari.sandboxes.create({
       template: "base",
-      timeoutMs: 15 * 60_000,
+      timeoutMs: policy.idleMs ?? 15 * 60_000,
       metadata: { airlock: "exec", server: policy.name },
+      ...(policy.cpu !== undefined ? { cpu: policy.cpu } : {}),
+      ...(policy.memMb !== undefined ? { memMb: policy.memMb } : {}),
+      ...(policy.diskGb !== undefined ? { diskGb: policy.diskGb } : {}),
     })
     await sandbox.connect()
     await installJailDependencies(sandbox, log)

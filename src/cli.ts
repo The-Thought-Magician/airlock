@@ -33,6 +33,7 @@ usage:
   airlock ps                               list Airlock's running sandboxes
   airlock reap                             kill them (leaked sandboxes bill until idle timeout)
   airlock templates [--prune]              list pinned/unused templates, delete the unused
+  airlock metrics                          live cpu/mem/disk of running sandboxes
 
 env:
   SOLARI_API_KEY   required by \`run\`, \`build\`, and \`exec\`
@@ -56,6 +57,13 @@ function describe(p: ServerPolicy): string {
     `  egress   : ${egress}`,
     `  mounts   : ${mounts}`,
     `  secrets  : ${Object.keys(p.secrets).length === 0 ? "none" : Object.keys(p.secrets).join(", ")}`,
+    `  broker   : ${p.broker.length === 0 ? "none" : p.broker.map((b) => `${b.header}→${b.host}`).join(", ")}`,
+    `  tool acl : ${
+      p.allowTools.length === 0 && p.denyTools.length === 0
+        ? "all tools"
+        : [p.allowTools.length ? `allow=[${p.allowTools.join(",")}]` : "", p.denyTools.length ? `deny=[${p.denyTools.join(",")}]` : ""].filter(Boolean).join(" ")
+    }`,
+    `  resources: ${[p.cpu && `cpu=${p.cpu}`, p.memMb && `mem=${p.memMb}MB`, p.diskGb && `disk=${p.diskGb}GB`, p.idleMs && `idle=${p.idleMs}ms`].filter(Boolean).join(" ") || "platform default"}`,
     `  template : ${p.template ?? "(none — `airlock build` to pin one; run provisions cold meanwhile)"}`,
     `  version  : ${p.version ?? "(unpinned)"}`,
     `  tools    : ${p.toolsHash ?? "(not pinned)"}`,
@@ -318,6 +326,44 @@ async function cmdPs(argv: string[], kill: boolean): Promise<number> {
 }
 
 /**
+ * `airlock metrics` — live CPU/memory/disk of Airlock's running sandboxes.
+ * The visibility the sandbox platforms (e2b, Daytona) offer, for the jails.
+ */
+async function cmdMetrics(): Promise<number> {
+  const apiKey = process.env.SOLARI_API_KEY
+  if (!apiKey) {
+    process.stderr.write("airlock: SOLARI_API_KEY is not set\n")
+    return 2
+  }
+  const { SolariClient } = await import("@solarisdk/sdk")
+  const solari = new SolariClient({ apiKey })
+
+  const ours: { sandboxId: string; metadata: Record<string, string> }[] = []
+  for await (const s of solari.sandboxes.listAll({})) {
+    if (s.metadata?.airlock !== undefined) ours.push(s)
+  }
+  if (ours.length === 0) {
+    process.stdout.write("no Airlock sandboxes running\n")
+    return 0
+  }
+  const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(0)}MB`
+  for (const s of ours) {
+    const label = [s.metadata.airlock, s.metadata.server].filter(Boolean).join("/")
+    try {
+      const handle = await solari.sandboxes.connect(s.sandboxId)
+      const m = await handle.metrics()
+      process.stdout.write(
+        `${s.sandboxId.slice(0, 18)}…  ${label.padEnd(20)}  ` +
+          `cpu ${m.cpuPct.toFixed(0)}%  mem ${mb(m.memBytes)}/${mb(m.memTotalBytes)}  disk ${mb(m.diskBytes)}\n`,
+      )
+    } catch (err) {
+      process.stdout.write(`${s.sandboxId.slice(0, 18)}…  ${label.padEnd(20)}  (metrics unavailable)\n`)
+    }
+  }
+  return 0
+}
+
+/**
  * `airlock templates [--prune]` — list Airlock's templates, and garbage-collect
  * the ones no policy references.
  *
@@ -550,6 +596,8 @@ async function main(): Promise<number> {
       return cmdPs(rest, true)
     case "templates":
       return cmdTemplates(rest)
+    case "metrics":
+      return cmdMetrics()
     case "init":
       return cmdInit(rest)
     case "log":

@@ -28,7 +28,7 @@ import {
   WORKDIR,
   WRAP_PREFIX,
 } from "./jail.js"
-import type { ServerPolicy } from "./config.js"
+import { isToolAllowed, type ServerPolicy } from "./config.js"
 import { hashToolSet } from "./tools-hash.js"
 import type { ToolDefinition } from "./mcp.js"
 
@@ -78,8 +78,11 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
   const solari = new SolariClient({ apiKey })
   const bootStart = Date.now()
   const createOpts = {
-    timeoutMs: opts.timeoutMs ?? 10 * 60_000,
+    timeoutMs: policy.idleMs ?? opts.timeoutMs ?? 10 * 60_000,
     metadata: { airlock: "run", server: policy.name },
+    ...(policy.cpu !== undefined ? { cpu: policy.cpu } : {}),
+    ...(policy.memMb !== undefined ? { memMb: policy.memMb } : {}),
+    ...(policy.diskGb !== undefined ? { diskGb: policy.diskGb } : {}),
   }
 
   // A pinned template contains the jail dependencies and the server at a fixed
@@ -291,7 +294,28 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
         }
       }
 
-      process.stdout.write(line + "\n")
+      // Per-tool permissions: filter tools/list so the client only ever sees
+      // the tools the policy allows. Structural — a tool that is hidden here
+      // also cannot be called (blocked in fromClient below).
+      let outLine = line
+      const filtering = policy.allowTools.length > 0 || policy.denyTools.length > 0
+      if (
+        filtering &&
+        msg?.result?.tools !== undefined &&
+        typeof msg.id !== "undefined" &&
+        inFlight.get(msg.id)?.method === "tools/list"
+      ) {
+        const all = msg.result.tools
+        const kept = all.filter((t) => isToolAllowed(policy, t.name))
+        if (kept.length !== all.length) {
+          const hidden = all.length - kept.length
+          log(`tool filter: exposing ${kept.length}/${all.length} tools (${hidden} hidden by policy)`)
+          msg.result.tools = kept
+          outLine = JSON.stringify(msg)
+        }
+      }
+
+      process.stdout.write(outLine + "\n")
       if (msg && msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
         const pending = inFlight.get(msg.id)
         if (pending) {
@@ -303,7 +327,7 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
               server: policy.name,
               tool: pending.tool,
               durationMs: Date.now() - pending.startedAt,
-              resultBytes: Buffer.byteLength(line, "utf8"),
+              resultBytes: Buffer.byteLength(outLine, "utf8"),
               isError: msg.error !== undefined || msg.result?.isError === true,
             })
           }
@@ -331,6 +355,28 @@ export async function runRelay(opts: RelayOptions): Promise<number> {
         const msg = JSON.parse(line) as { id?: string | number; method?: string; params?: { name?: string } }
         if (msg.method !== undefined) {
           const isToolCall = msg.method === "tools/call"
+          // Block a call to a tool the policy does not permit, even if the
+          // client somehow knows the name. Defense in depth behind the
+          // tools/list filter — the call never reaches the server.
+          if (isToolCall && msg.params?.name && !isToolAllowed(policy, msg.params.name)) {
+            log(`tool filter: blocked tools/call for "${msg.params.name}" (not permitted by policy)`)
+            audit.write({
+              kind: "warn",
+              at: new Date().toISOString(),
+              server: policy.name,
+              message: `blocked tools/call for disallowed tool "${msg.params.name}"`,
+            })
+            if (msg.id !== undefined) {
+              process.stdout.write(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: msg.id,
+                  error: { code: -32601, message: `airlock: tool "${msg.params.name}" is not permitted by policy` },
+                }) + "\n",
+              )
+            }
+            return // do not forward to the server
+          }
           if (msg.id !== undefined) {
             inFlight.set(msg.id, {
               method: msg.method,

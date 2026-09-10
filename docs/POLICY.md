@@ -26,8 +26,15 @@ Airlock looks for the file at `./airlock.toml`, then
 | `template` | string | — | Pinned `tpl_…`, written by `airlock build` |
 | `version` | string | — | Version that landed in the template, written by `airlock build` |
 | `tools_hash` | string | — | Tool-definition hash, written by `airlock build` (§3.4) |
+| `allow_tools` | string[] | `[]` (all) | If non-empty, ONLY these tools are exposed and callable |
+| `deny_tools` | string[] | `[]` | Tools removed from the server (hidden and blocked) |
+| `cpu` | int 1–16 | platform | Sandbox vCPUs |
+| `mem_mb` | int 128–65536 | platform | Sandbox memory (MB) |
+| `disk_gb` | int 1–100 | platform | Sandbox disk (GB) |
+| `idle_ms` | int 30000–3600000 | 10 min | Rolling idle timeout before the sandbox is reaped |
 
-The last three are managed by `airlock build` — you don't hand-write them.
+`template` / `version` / `tools_hash` are managed by `airlock build` — you don't
+hand-write them. Everything else you set.
 
 ## `launcher`
 
@@ -83,6 +90,39 @@ mounts = [
 - The guest path mirrors the host path under `/mnt/airlock/…` by default; pass
   `guestPath` to override.
 - `.git` and `node_modules` are skipped on upload.
+
+## `allow_tools` / `deny_tools` — per-tool permissions
+
+Restrict which of a server's tools are usable, enforced structurally in the
+relay. If `allow_tools` is set, only those tools appear in `tools/list` and only
+those can be called; everything else is hidden and any `tools/call` for it is
+rejected before it reaches the server. `deny_tools` removes specific tools.
+
+```toml
+[server.github]
+launcher    = "npx"
+package     = "@modelcontextprotocol/server-github"
+egress      = ["api.github.com"]
+allow_tools = ["get_issue", "list_issues", "get_file_contents"]   # read-only subset
+```
+
+A client cannot call a tool it was never shown, even if it guesses the name —
+the block is in Airlock, not a suggestion to the server.
+
+## `cpu` / `mem_mb` / `disk_gb` / `idle_ms` — resource limits
+
+Cap the sandbox's resources and how long it lingers idle. Omitted fields use the
+platform default (and Airlock's 10-minute idle default).
+
+```toml
+[server.heavy]
+launcher = "npx"
+package  = "@acme/big-server"
+egress   = []
+cpu      = 4
+mem_mb   = 4096
+idle_ms  = 300000     # reap after 5 min idle
+```
 
 ## `secrets` vs `broker` — read this
 
