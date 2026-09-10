@@ -1,0 +1,88 @@
+{
+  "at": "2026-09-10T05:26:53.449Z",
+  "score": "11/11",
+  "perf": {
+    "timeToReadyMs": 12289,
+    "relayP50Ms": 283,
+    "relayP95Ms": 355
+  },
+  "rows": [
+    {
+      "id": "fs.read_secrets",
+      "attack": "read ~/.ssh, ~/.aws",
+      "expected": "absent",
+      "observed": "all target files absent (ENOENT)",
+      "contained": true
+    },
+    {
+      "id": "net.raw_socket",
+      "attack": "raw TCP to 1.1.1.1",
+      "expected": "no route",
+      "observed": "blocked: ENETUNREACH",
+      "contained": true
+    },
+    {
+      "id": "net.dns_exfil",
+      "attack": "resolve example.com",
+      "expected": "no DNS",
+      "observed": "blocked: EAI_AGAIN",
+      "contained": true
+    },
+    {
+      "id": "net.http_exfil",
+      "attack": "curl example.com",
+      "expected": "blocked",
+      "observed": "ERR 6",
+      "contained": true
+    },
+    {
+      "id": "escape.setns_host",
+      "attack": "nsenter host netns",
+      "expected": "denied",
+      "observed": "ERR 1 nsenter: cannot open /proc/1/ns/net: Permission denied",
+      "contained": true
+    },
+    {
+      "id": "env.host_secret_leak",
+      "attack": "read own env for host secrets",
+      "expected": "none present",
+      "observed": "no host secrets in env",
+      "contained": true
+    },
+    {
+      "id": "egress.allowlist_works",
+      "attack": "curl api.github.com (allowed)",
+      "expected": "reachable",
+      "observed": "code=200",
+      "contained": true
+    },
+    {
+      "id": "egress.non_allowlisted_blocked",
+      "attack": "curl example.com (not allowed)",
+      "expected": "blocked",
+      "observed": "ERR 56",
+      "contained": true
+    },
+    {
+      "id": "rugpull.drift_blocked",
+      "attack": "tools changed vs pinned hash",
+      "expected": "startup blocked",
+      "observed": "blocked",
+      "contained": true
+    },
+    {
+      "id": "acl.denied_tool_hidden",
+      "attack": "deny_tools hides a tool from tools/list",
+      "expected": "hidden",
+      "observed": "exfil_raw_socket,exfil_dns,exfil_http,reach_allowlisted,escape_netns,dump_env",
+      "contained": true
+    },
+    {
+      "id": "acl.denied_tool_blocked",
+      "attack": "tools/call for a denied tool",
+      "expected": "rejected by relay",
+      "observed": "blocked",
+      "contained": true
+    }
+  ]
+}

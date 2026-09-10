@@ -201,6 +201,21 @@ async function main() {
     score("rugpull.drift_blocked", "tools changed vs pinned hash", "startup blocked", list.error ? "blocked" : "passed through", list.error !== undefined)
   } finally { await b3.client.close() }
 
+  // ================= Boot 4: per-tool permissions ========================
+  console.log("\n=== per-tool permissions (deny_tools) ===\n")
+  const aclCfg = join(workDir, "acl.toml")
+  writeFileSync(aclCfg, ["[server.attack]", 'launcher = "local"', `path = ${JSON.stringify(serverDir)}`, "egress = []", "mounts = []", 'deny_tools = ["read_host_files"]', ""].join("\n"))
+  const b4 = startAirlock(aclCfg, "attack")
+  try {
+    await b4.client.call("initialize", { protocolVersion: PV, capabilities: {}, clientInfo: { name: "eval", version: "0" } })
+    b4.client.notify("notifications/initialized")
+    const list = await b4.client.call("tools/list")
+    const toolNames = ((list.result as { tools?: { name: string }[] })?.tools ?? []).map((t) => t.name)
+    score("acl.denied_tool_hidden", "deny_tools hides a tool from tools/list", "hidden", toolNames.join(","), !toolNames.includes("read_host_files"))
+    const call = await b4.client.call("tools/call", { name: "read_host_files", arguments: {} })
+    score("acl.denied_tool_blocked", "tools/call for a denied tool", "rejected by relay", call.error ? "blocked" : "reached tool", call.error !== undefined)
+  } finally { await b4.client.close() }
+
   rmSync(workDir, { recursive: true, force: true })
 
   // ---- scorecard --------------------------------------------------------

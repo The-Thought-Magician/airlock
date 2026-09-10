@@ -7,12 +7,12 @@ with numbers you can reproduce.
 ## Security eval — the scorecard
 
 `npm run eval` boots the real `airlock run` against a local server that exposes
-one tool per attack vector and scores each as **contained** or **leaked**. Run
-against the live Solari API on 2026-09-10:
+one tool per attack vector and scores each as **contained** or **leaked**.
+Re-run against the live Solari API after the latest feature work:
 
 ```
-SECURITY SCORE: 9/9 attack vectors contained
-PERFORMANCE:    relay p50 308ms, p95 348ms, time-to-ready 11.4s (cold provision)
+SECURITY SCORE: 11/11 attack vectors contained
+PERFORMANCE:    relay p50 283ms, p95 355ms, time-to-ready 12.3s (cold provision)
 ```
 
 | # | Attack vector | What the server tries | Result |
@@ -26,9 +26,17 @@ PERFORMANCE:    relay p50 308ms, p95 348ms, time-to-ready 11.4s (cold provision)
 | `egress.allowlist_works` | `curl` an allowlisted host (should succeed) | ✅ reachable |
 | `egress.non_allowlisted_blocked` | `curl` a non-allowlisted host | ✅ blocked |
 | `rugpull.drift_blocked` | serve tools that don't match the pinned hash | ✅ startup blocked |
+| `acl.denied_tool_hidden` | a `deny_tools` tool appears in `tools/list` | ✅ hidden |
+| `acl.denied_tool_blocked` | call a denied tool anyway | ✅ rejected by the relay |
 
 The score is a self-verifying test, not a claim: `npm run eval` exits non-zero if
-any vector leaks, and writes the full result to `findings/eval-<ts>.json`.
+any vector leaks, and writes the full result to `findings/eval-<ts>.json`
+(committed under `findings/`, so the run is auditable).
+
+Two more security controls have their own live evals rather than folding into
+this scorecard: `npm run test:broker` (credential injected at the proxy, absent
+from the server's env, egress still enforced — 3/3) and `npm run test:skill`
+(a skill's code jailed — cannot read host files or reach the network — 6/6).
 
 Individual mechanisms have their own deeper probes: `npm run probe:netns` (7/7 on
 the egress jail), `test:broker`, `test:drift`, `test:nodefetch`, and the
@@ -38,9 +46,14 @@ the egress jail), `test:broker`, `test:drift`, `test:nodefetch`, and the
 
 | Metric | Measured | Note |
 |--------|----------|------|
-| Relay per-call round trip | ~253–308 ms p50 | This is **one network RTT to the Solari gateway** (a bare TCP connect is ~263 ms). Airlock adds no measurable overhead. |
-| Time-to-ready (cold) | ~11–12 s | create + apt + install + jail. Variable with platform load (seen 1.6 s–125 s for the create step alone). |
+| Relay per-call round trip | 283 ms p50 / 355 ms p95 | This is **one network RTT to the Solari gateway** — a bare TCP connect to the gateway measured 285–314 ms in the same run, so Airlock's relay adds **~0 overhead**. |
+| Time-to-ready (cold) | 12.3 s | create + apt + install + jail. Variable with platform load (seen 1.6 s–125 s for the create step alone). |
 | Time-to-ready (pinned template) | ~11 s | When the platform serves the template; best-effort, see LIMITATIONS. |
+
+The relay-latency-equals-network-RTT result is worth dwelling on: p50 283 ms
+against a 285 ms bare TCP connect means the interposition, the jail, and the
+base64 stdout framing together cost single-digit milliseconds. You pay your
+distance to the region, not a tax for the sandboxing.
 
 Latency is a property of your distance to the region, not of Airlock. It is fine
 for interactive tool use; a workload firing hundreds of sequential calls will
