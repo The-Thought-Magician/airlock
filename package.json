@@ -12,7 +12,7 @@
     "relay:e2e": "tsx scripts/relay-e2e.ts",
     "airlock": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "e2e": "tsx scripts/e2e-airlock.ts",
     "probe:warmstart": "tsx scripts/probe-warmstart.ts",
     "probe:warmstart2": "tsx scripts/probe-warmstart2.ts",
@@ -28,7 +28,8 @@
     "test:nodefetch": "tsx scripts/test-nodefetch.ts",
     "eval": "tsx scripts/eval.ts",
     "test:skill-parse": "tsx scripts/test-skill-parse.ts",
-    "test:skill": "tsx scripts/test-skill.ts"
+    "test:skill": "tsx scripts/test-skill.ts",
+    "prepare": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@solarisdk/sdk": "^0.1.2",

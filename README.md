@@ -66,9 +66,14 @@ tell the difference.
 
 ```bash
 git clone <this repo> && cd airlock
-npm install
+npm install                            # builds the CLI automatically
+npm link                               # puts `airlock` on your PATH
 export SOLARI_API_KEY=slr_live_...     # grab one at console.getsolari.com
 ```
+
+To wire it into Claude Code, Codex, or Cursor, see
+[docs/INTEGRATION.md](docs/INTEGRATION.md) — it is a one-line swap in the client's
+MCP config (`airlock run <name>` in place of the server's command).
 
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) to get from zero to a jailed server
 in five minutes.
@@ -163,6 +168,7 @@ Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and
 | [COMPARISON](docs/COMPARISON.md) | The security eval scorecard, benchmarks, and how Airlock compares to ToolHive / Docker MCP Gateway / nono |
 | [SKILLS](docs/SKILLS.md) | Jailing agent skills (a SKILL.md + scripts) as sandboxed MCP tools |
 | [QUICKSTART](docs/QUICKSTART.md) | Zero to a jailed server in five minutes |
+| [INTEGRATION](docs/INTEGRATION.md) | Wiring Airlock into Claude Code, Codex, and Cursor |
 | [THREAT-MODEL](docs/THREAT-MODEL.md) | What Airlock defends against, what it doesn't, residual risk |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | The relay, the jail, lifecycle, the mechanisms that were measured |
 | [POLICY](docs/POLICY.md) | Every `airlock.toml` field, with worked examples |
