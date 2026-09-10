@@ -43,9 +43,11 @@ sandbox has no path to your laptop's filesystem at all.
                                                         └────────────────────┘
 ```
 
-**Security eval: 9/9 attack vectors contained** — filesystem theft, raw-socket
-egress, DNS exfiltration, netns escape, and rug pulls all blocked, verified live
-by `npm run eval`. Full scorecard and an honest comparison against ToolHive,
+**Security eval: 11/11 attack vectors contained** — filesystem theft,
+raw-socket egress, DNS exfiltration, netns escape, rug pulls, and denied-tool
+calls all blocked, verified live by `npm run eval`. Relay latency is one network
+round trip (p50 283 ms, ≈ a bare TCP connect to the gateway, so Airlock adds ~0
+overhead). Full scorecard, benchmarks, and an honest comparison against ToolHive,
 Docker MCP Gateway, and nono in [docs/COMPARISON.md](docs/COMPARISON.md).
 
 The only thing you change is the command in your MCP config.
@@ -61,6 +63,24 @@ The only thing you change is the command in your MCP config.
 
 Tool names, schemas, and results pass through unmodified — the client cannot
 tell the difference.
+
+## What you can lock down
+
+Every control is deny-by-default and set per server in `airlock.toml`:
+
+| Control | What it does |
+|---------|--------------|
+| **Filesystem** | None by default. Opt specific paths in with `mounts` (`ro`/`rw`). Your files are absent by construction, not by a rule. |
+| **Network egress** | None by default. `egress` is a domain allowlist enforced structurally (the server has no route to anything else). |
+| **Credential brokering** | `broker` injects a secret at the proxy on allowlisted hosts — the server never receives it. |
+| **Per-tool permissions** | `allow_tools` / `deny_tools` filter which of a server's tools are exposed and callable, enforced in the relay. |
+| **Supply-chain pinning** | `airlock build` pins an immutable template; tool-definition drift (rug pulls) is blocked at runtime. |
+| **Resource limits** | `cpu` / `mem_mb` / `disk_gb` / `idle_ms` cap the sandbox. |
+| **Skills** | Jail an agent skill's code — structurally (MCP bridge) or natively-loaded (`airlock skill install`). See [SKILLS](docs/SKILLS.md). |
+| **Observability** | Append-only audit log (`airlock log`), live resource metrics (`airlock metrics`). |
+
+Commands: `run`, `exec`, `build`, `skill install`, `init`, `policy`, `log`,
+`ps`, `reap`, `templates`, `metrics` — `airlock --help` for the full list.
 
 ## Install
 
@@ -127,7 +147,7 @@ See [demo/README.md](demo/README.md) for the full safety statement.
 | Team-wide policy | Bespoke tooling | A committed config file |
 | **Cost** | **Free** | **Per sandbox-hour** |
 | **Offline** | **Yes** | **No — needs connectivity** |
-| Per-call latency | None | One round trip to your region (~250 ms) |
+| Per-call latency | None | One round trip to your region (~280 ms; ~0 Airlock overhead) |
 
 Docker is free and offline; Airlock is not. It earns its place when Docker
 isn't an option (locked-down machines), when you want the blast radius off your
@@ -146,15 +166,20 @@ to separate proven from aspirational.
 - **Egress control** — a network namespace with no interfaces, bridged to a
   filtering proxy; verified to block raw-socket bypass and DNS exfiltration
   (§3.2). This is the heart of the tool and has not failed once.
-- **The relay** — real third-party servers run through it unmodified.
-- **Audit log**, **filesystem/network demo**, **fail-closed jail verification**.
+- **The relay** — real third-party servers run through it unmodified; the whole
+  eval battery (11/11) and end-to-end suite (12/12) run against it live.
+- **Per-tool permissions**, **audit log**, **live metrics**, **fail-closed jail
+  verification**, and the **filesystem/network demo**.
 
 **Built, with honest caveats:**
-- **Credential brokering** (§3.3) — works, but requires TLS interception inside
-  the sandbox. Understand the tradeoff before using it.
-- **Version pinning** (§4) — a `tpl_…` template you build. It gives immutability
-  and reproducibility, but the platform serves custom templates unreliably, so
-  it is **best-effort**: `airlock run` falls back to a cold provision, loudly.
+- **Credential brokering** (§3.3) — built and tested (`test:broker` 3/3), but
+  requires TLS interception inside the sandbox. Understand the tradeoff.
+- **Version pinning** (§4) — a `tpl_…` template you build. Immutable and
+  reproducible, but the platform serves custom templates unreliably, so it is
+  **best-effort**: `airlock run` falls back to a cold provision, loudly.
+- **Skills** — jailed structurally (MCP bridge) or natively (`skill install`,
+  code kept off your machine); the residual is prompt injection of the agent,
+  which no mode fixes and which the §3.5 scan only warns about.
 - **Tool-definition pinning** (§3.4) blocks rug pulls at runtime;
   **prompt-injection scanning** (§3.5) is warnings-only.
 
